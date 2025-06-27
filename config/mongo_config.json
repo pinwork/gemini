@@ -1,0 +1,28 @@
+{
+    "client_params": {
+      "serverSelectionTimeoutMS": 30000,
+      "connectTimeoutMS": 30000,
+      "socketTimeoutMS": 30000
+    },
+    "databases": {
+      "main_db": {
+        "uri": "mongodb://admin:admin123@84.247.129.81:27017/?authSource=admin",
+        "name": "webinfo",
+        "collections": {
+          "domain_main": "domain_main",
+          "domain_segmented": "domain_segmented",
+          "gemini": "gemini",
+          "gemini_address_list": "gemini_address_list",
+          "gemini_email_list": "gemini_email_list",
+          "gemini_phone_list": "gemini_phone_list"
+        }
+      },
+      "api_db": {
+        "uri": "mongodb://admin:admin123@84.247.129.81:27017/?authSource=admin",
+        "name": "api",
+        "collections": {
+          "keys": "data"
+        }
+      }
+    }
+  }  

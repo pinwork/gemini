@@ -1,0 +1,356 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "Max 2 sentence description of website functionality and purpose."
+    },
+    "similarity_search_phrases": {
+      "type": "string",
+      "description": "Core business function phrases for semantic similarity matching. Example: project management software, team collaboration, task tracking platform, agile workflow tools"
+    },
+    "vector_search_phrase": {
+      "type": "string",
+      "description": "Single precise 4-5 word phrase capturing core business essence for maximum vector similarity accuracy."
+    },
+    "ai_semantic_segmentation": {
+      "type": "string",
+      "description": "Corrected domain segmentation with words separated by spaces. Must reconstruct original domain when joined. If unsegmentable, return original domain core."
+    },
+    "domain_thematic_parts": {
+      "type": "string",
+      "description": "Space-separated industry/business-specific terms from domain segmentation that carry core meaning and business context. Used for generating similar themed domains."
+    },
+    "domain_generic_parts": {
+      "type": "string",
+      "description": "Space-separated theme-neutral words from domain segmentation commonly used across different industries to secure available domains. Exclude brands, abbreviations, random sequences."
+    },
+    "segments_language": {
+      "type": "string",
+      "description": "Language of domain segments using ISO 639-1 codes. Analyze the language origin of segmented words. Examples: 'buchhandlung.de' segmented as 'buch handlung' = 'de' (German words), 'bookstore.com' segmented as 'book store' = 'en' (English words). Use 'mixed' for multiple languages, 'unknown' for unidentifiable terms."
+    },
+    "domain_formation_pattern": {
+      "type": "string",
+      "description": "Pattern used to construct the domain name",
+      "enum": [
+        "dictionary_word",
+        "compound_words",
+        "coined_word",
+        "portmanteau",
+        "truncated_word",
+        "acronym",
+        "initialism",
+        "personal_name",
+        "geographic_name",
+        "numeric_hybrid",
+        "transliterated",
+        "hybrid_formation",
+        "unclear_formation"
+      ]
+    },
+    "b2c_detected": {
+      "type": "boolean",
+      "description": "True only if core offering targets individual consumers (B2C)."
+    },
+    "b2b_detected": {
+      "type": "boolean",
+      "description": "True only if core offering targets businesses (B2B)."
+    },
+    "personal_project_detected": {
+      "type": "boolean",
+      "description": "Personal project indicators (individual portfolio, personal blog, hobby project, single person effort)."
+    },
+    "local_business_detected": {
+      "type": "boolean",
+      "description": "Physical brick-and-mortar business where customers can visit in person (restaurants, retail stores, salons, medical offices, repair shops, etc.). Indicates physical location for customer service delivery, not just geographic targeting."
+    },
+    "target_age_group": {
+      "type": "string",
+      "description": "Primary age group that the website/product targets based on content, design, language, and product offerings.",
+      "enum": [
+        "children",
+        "teens",
+        "young_adults",
+        "adults",
+        "middle_aged",
+        "seniors",
+        "elderly",
+        "all_ages",
+        "unspecified"
+      ]
+    },
+    "target_gender": {
+      "type": "string",
+      "description": "Primary gender targeting based on design, content and products.",
+      "enum": [
+        "male",
+        "female",
+        "unspecified"
+      ]
+    },
+    "geo_scope": {
+      "type": "string",
+      "description": "Geographic scope of this specific website's target audience, not the parent company.",
+      "enum": [
+        "local",
+        "regional",
+        "national",
+        "eu",
+        "north_america",
+        "asia_pacific",
+        "dach",
+        "nordic",
+        "cis",
+        "latam",
+        "mena",
+        "global"
+      ]
+    },
+    "pricing_page_detected": {
+      "type": "boolean",
+      "description": "Pricing information present."
+    },
+    "blog_detected": {
+      "type": "boolean",
+      "description": "Blog or content updates present."
+    },
+    "ecommerce_detected": {
+      "type": "boolean",
+      "description": "Single-vendor online store functionality (company sells its own products directly to customers)."
+    },
+    "hiring_detected": {
+      "type": "boolean",
+      "description": "True only if the site hosts its own career/apply pages or embeds a jobs widget for its staff."
+    },
+    "api_available_detected": {
+      "type": "boolean",
+      "description": "True only if the site exposes its own public or partner API (docs link, /api page, swagger file)."
+    },
+    "contact_page_detected": {
+      "type": "boolean",
+      "description": "Contact us, get in touch, or contact information page present."
+    },
+    "payment_methods_detected": {
+      "type": "boolean",
+      "description": "True only if site's own checkout advertises Stripe, PayPal, crypto, or similar payment options."
+    },
+    "analytics_tools_detected": {
+      "type": "boolean",
+      "description": "True only if embedded tracking script for Google Analytics, Hotjar, Mixpanel, etc. is present."
+    },
+    "knowledge_base_detected": {
+      "type": "boolean",
+      "description": "True only if site hosts its own help/FAQ hub."
+    },
+    "subscription_detected": {
+      "type": "boolean",
+      "description": "True only if the site charges recurring fees for its own product or content."
+    },
+    "monetizes_via_ads_detected": {
+      "type": "boolean",
+      "description": "True only if display ads are served on this site (banner code, AdSense, sponsor slots)."
+    },
+    "saas_detected": {
+      "type": "boolean",
+      "description": "True only if the site itself offers SaaS (login/signup to hosted software)."
+    },
+    "recruits_affiliates_detected": {
+      "type": "boolean",
+      "description": "True only if the company runs its own affiliate/partner programme (signup form, terms page)."
+    },
+    "community_platform_detected": {
+      "type": "boolean",
+      "description": "True only if the site hosts its own forum, user board, or social layer. Embedding generic comment widgets does not count."
+    },
+    "funding_received_detected": {
+      "type": "boolean",
+      "description": "True only if the company running this site reports its own funding round (press-release, 'Investors' page)."
+    },
+    "disposable_site_detected": {
+      "type": "boolean",
+      "description": "Low-quality or deceptive website indicators: thin content, excessive ads, push notifications, instant redirects, poor design, minimal navigation, or lacking trust signals."
+    },
+    "mobile_first_detected": {
+      "type": "boolean",
+      "description": "True only if layout is clearly built mobile-first."
+    },
+    "cms_platform": {
+      "type": "string",
+      "description": "Name of CMS or site generator identified in source code."
+    },
+    "primary_language": {
+      "type": "string",
+      "description": "ISO 639-1 two-letter code of dominant site language. For English use 'en', Spanish 'es', etc."
+    },
+    "external_links_count": {
+      "type": "integer",
+      "description": "Total count of all external outbound links (including duplicates to same URLs)."
+    },
+    "external_domains_count": {
+      "type": "integer",
+      "description": "Count of unique external domains being linked to."
+    },
+    "internal_links_count": {
+      "type": "integer",
+      "description": "Total count of all internal links (including duplicates to same URLs)."
+    },
+    "internal_pages_count": {
+      "type": "integer",
+      "description": "Count of unique internal page URLs being linked to."
+    },
+    "blog_url": {
+      "type": "string",
+      "description": "Blog section URL in canonical format (RFC 3986) - provide only if blog detected."
+    },
+    "recruits_affiliates_url": {
+      "type": "string",
+      "description": "Affiliate recruitment page URL in canonical format (RFC 3986) - provide only if affiliate program detected."
+    },
+    "contact_page_url": {
+      "type": "string",
+      "description": "Contact page URL in canonical format (RFC 3986) - provide only if contact page detected."
+    },
+    "api_documentation_url": {
+      "type": "string",
+      "description": "API documentation page URL in canonical format (RFC 3986) - provide only if API documentation section detected."
+    },
+    "app_platforms": {
+      "type": "string",
+      "description": "Software platforms developed by website. Examples: 'windows, macos, linux, ios, android, chrome, firefox, edge, safari, electron', etc. Use comma for multiple platforms."
+    },
+    "geo_country": {
+      "type": "string",
+      "description": "ISO country code where business operates (US, GB, CA, DE, etc.) - provide if determinable"
+    },
+    "geo_region": {
+      "type": "string",
+      "description": "State/province/region using standard abbreviations where countries have them (CA/NY/TX for USA, ON/QC for Canada, BY/NW for Germany) or standard English names from Google Maps for other countries - provide if determinable"
+    },
+    "geo_city": {
+      "type": "string",
+      "description": "City using standard English names without diacritics (e.g., Munich not München, Cologne not Köln) - provide if determinable"
+    },
+    "email_list": {
+      "type": "array",
+      "description": "List of email addresses found on the website that are used for contacting administration or other support matters",
+      "items": {
+        "type": "object",
+        "properties": {
+          "contact_email": {
+            "type": "string",
+            "description": "Email address in RFC 5322 format. If obfuscated email detected (e.g. 'john [at] example.com'), convert to standard format 'john@example.com'"
+          },
+          "contact_type": {
+            "type": "string",
+            "description": "Single industry-standard word for contact purpose. Examples: general, support, sales, info, admin, etc."
+          },
+          "corporate": {
+            "type": "boolean",
+            "description": "True if email uses company domain, false for external providers (gmail, yahoo, etc)"
+          }
+        },
+        "required": [
+          "contact_email",
+          "contact_type",
+          "corporate"
+        ]
+      }
+    },
+    "phone_list": {
+      "type": "array",
+      "description": "List of phone numbers found on the website that are used for contacting administration or ordering services",
+      "items": {
+        "type": "object",
+        "properties": {
+          "phone_number": {
+            "type": "string",
+            "description": "Phone number in E164 international format (e.g., +1234567890) - starts with + followed by country code and digits only, no spaces or separators"
+          },
+          "whatsapp": {
+            "type": "boolean",
+            "description": "Whether this number supports WhatsApp messaging"
+          },
+          "contact_type": {
+            "type": "string",
+            "description": "Single industry-standard word for phone contact purpose. Examples: general, support, sales, office, mobile, etc."
+          }
+        },
+        "required": [
+          "phone_number",
+          "whatsapp",
+          "contact_type"
+        ]
+      }
+    },
+    "address_list": {
+      "type": "array",
+      "description": "List of physical addresses found on the website that are used for visiting offices or mailing correspondence",
+      "items": {
+        "type": "object",
+        "properties": {
+          "full_address": {
+            "type": "string",
+            "description": "Complete physical address as found on website"
+          },
+          "address_type": {
+            "type": "string",
+            "description": "Single industry-standard word for address purpose. Examples: headquarters, office, branch, warehouse, store, etc."
+          },
+          "country": {
+            "type": "string",
+            "description": "ISO 2-letter country code for this address"
+          }
+        },
+        "required": [
+          "full_address",
+          "address_type",
+          "country"
+        ]
+      }
+    }
+  },
+  "required": [
+    "summary",
+    "similarity_search_phrases",
+    "vector_search_phrase",
+    "ai_semantic_segmentation",
+    "domain_thematic_parts",
+    "domain_generic_parts",
+    "segments_language",
+    "domain_formation_pattern",
+    "b2c_detected",
+    "b2b_detected",
+    "personal_project_detected",
+    "local_business_detected",
+    "target_age_group",
+    "target_gender",
+    "geo_scope",
+    "pricing_page_detected",
+    "blog_detected",
+    "ecommerce_detected",
+    "hiring_detected",
+    "api_available_detected",
+    "contact_page_detected",
+    "payment_methods_detected",
+    "analytics_tools_detected",
+    "knowledge_base_detected",
+    "subscription_detected",
+    "monetizes_via_ads_detected",
+    "saas_detected",
+    "recruits_affiliates_detected",
+    "community_platform_detected",
+    "funding_received_detected",
+    "disposable_site_detected",
+    "mobile_first_detected",
+    "cms_platform",
+    "primary_language",
+    "external_links_count",
+    "external_domains_count",
+    "internal_links_count",
+    "internal_pages_count",
+    "app_platforms",
+    "email_list",
+    "phone_list",
+    "address_list"
+  ]
+}
