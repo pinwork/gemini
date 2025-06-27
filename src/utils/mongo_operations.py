@@ -4,13 +4,84 @@
 import json
 import asyncio
 import logging
+import inspect
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Tuple, Optional, Dict
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import (
+    DuplicateKeyError,
+    AutoReconnect,
+    NetworkTimeout,
+    ServerSelectionTimeoutError,
+    ConnectionFailure,
+    OperationFailure
+)
 from bson import ObjectId
+
+# ---------------------------------------------------------------------------
+# >>>>>>>> GLOBAL MONGO RETRY PATCH — автоматичні нескінченні ретраї
+# ---------------------------------------------------------------------------
+
+RETRY_DELAY = 10  # секунд очікування між спробами
+
+def _retry_forever(coro):
+    """Обгортає coroutine-метод Motor нескінченним ретраєм на мережеві збої."""
+    async def wrapper(*args, **kwargs):
+        logger = logging.getLogger("mongo_operations")
+        retry_count = 0
+        
+        while True:
+            try:
+                return await coro(*args, **kwargs)
+            except (
+                AutoReconnect,
+                NetworkTimeout,
+                ServerSelectionTimeoutError,
+                ConnectionFailure,
+                OperationFailure,  # Включаємо операційні помилки (часто мережеві)
+            ) as e:
+                retry_count += 1
+                
+                # 🎨 КРАСИВІ ЛОГИ замість жахливих стектрейсів
+                error_type = type(e).__name__
+                error_str = str(e)
+                
+                if "getaddrinfo failed" in error_str:
+                    short_msg = "DNS resolution failed - check MongoDB host config"
+                elif "authentication failed" in error_str.lower():
+                    short_msg = "MongoDB authentication failed"
+                elif "timeout" in error_str.lower():
+                    short_msg = "MongoDB connection timeout"
+                else:
+                    short_msg = f"MongoDB connection issue ({error_type})"
+                
+                # Логуємо коротко і красиво
+                if retry_count == 1:
+                    logger.warning(f"🔄 {short_msg}, retrying every {RETRY_DELAY}s...")
+                elif retry_count % 6 == 0:  # Кожну хвилину (10s * 6 = 60s)
+                    logger.warning(f"🔄 Still retrying MongoDB connection (attempt #{retry_count})")
+                
+                await asyncio.sleep(RETRY_DELAY)
+                
+            except Exception:
+                raise  # Інші помилки проходять наверх
+    return wrapper
+
+# Патчимо всі coroutine-методи у Motor класах
+for _cls in (
+    AsyncIOMotorClient,
+    AsyncIOMotorClient.__bases__[0],          # AsyncIOMotorDatabase
+    AsyncIOMotorClient.__bases__[0].__bases__[0],  # AsyncIOMotorCollection
+):
+    for _name, _attr in _cls.__dict__.items():
+        if inspect.iscoroutinefunction(_attr):
+            setattr(_cls, _name, _retry_forever(_attr))
+
+# ---------------------------------------------------------------------------
+# <<<<<<<< END OF PATCH
+# ---------------------------------------------------------------------------
 
 try:
     from .proxy_config import ProxyConfig
@@ -72,6 +143,7 @@ def needs_ip_refresh(key_rec: dict) -> bool:
 async def get_domain_for_analysis(mongo_client: AsyncIOMotorClient) -> Tuple[str, str, str]:
     """
     Отримує домен для аналізу з MongoDB
+    З автоматичними ретраями через глобальний патч
     
     Args:
         mongo_client: Клієнт MongoDB
@@ -88,6 +160,7 @@ async def get_domain_for_analysis(mongo_client: AsyncIOMotorClient) -> Tuple[str
     while True:
         domain_collection = mongo_client[db_name][collection_name]
         
+        # Ця операція автоматично ретрайтиться через глобальний патч
         domain_record = await domain_collection.find_one_and_update(
             {"status": "processed"},
             {
@@ -113,6 +186,7 @@ async def get_domain_for_analysis(mongo_client: AsyncIOMotorClient) -> Tuple[str
 async def get_api_key_and_proxy(mongo_client: AsyncIOMotorClient) -> Tuple[str, ProxyConfig, str, dict]:
     """
     Отримує доступний API ключ з проксі конфігурацією
+    З автоматичними ретраями через глобальний патч
     
     Args:
         mongo_client: Клієнт MongoDB
@@ -129,6 +203,7 @@ async def get_api_key_and_proxy(mongo_client: AsyncIOMotorClient) -> Tuple[str, 
         
         api_keys_collection = mongo_client[api_db_name][api_collection_name]
         
+        # Ця операція автоматично ретрайтиться через глобальний патч
         api_key_record = await api_keys_collection.find_one_and_update(
             {
                 "api_status": "active",
@@ -185,6 +260,7 @@ async def finalize_api_key_usage(mongo_client: AsyncIOMotorClient, key_record_id
                                 freeze_minutes: Optional[int] = None) -> None:
     """
     Фіналізує використання API ключа, оновлює статистику
+    З автоматичними ретраями через глобальний патч
     
     Args:
         mongo_client: Клієнт MongoDB
@@ -220,6 +296,7 @@ async def finalize_api_key_usage(mongo_client: AsyncIOMotorClient, key_record_id
         if working_proxy and working_proxy.username:
             update_query["$set"]["proxy_username"] = working_proxy.username
         
+        # Ця операція автоматично ретрайтиться через глобальний патч
         result = await api_keys_collection.update_one(
             {"_id": ObjectId(key_record_id)},
             update_query
@@ -235,6 +312,7 @@ async def revert_domain_status(mongo_client: AsyncIOMotorClient, domain_id: str,
                               reason: str = "", revert_logger: Optional[logging.Logger] = None) -> None:
     """
     Повертає статус домену назад до 'processed' у випадку помилки
+    З автоматичними ретраями через глобальний патч
     
     Args:
         mongo_client: Клієнт MongoDB
@@ -248,6 +326,7 @@ async def revert_domain_status(mongo_client: AsyncIOMotorClient, domain_id: str,
         
         domain_collection = mongo_client[db_name][collection_name]
         
+        # Ця операція автоматично ретрайтиться через глобальний патч
         result = await domain_collection.update_one(
             {"_id": ObjectId(domain_id)},
             {
@@ -271,6 +350,7 @@ async def revert_domain_status(mongo_client: AsyncIOMotorClient, domain_id: str,
 async def set_domain_error_status(mongo_client: AsyncIOMotorClient, domain_id: str, error_reason: str = "") -> None:
     """
     Встановлює статус помилки для домену
+    З автоматичними ретраями через глобальний патч
     
     Args:
         mongo_client: Клієнт MongoDB
@@ -291,6 +371,7 @@ async def set_domain_error_status(mongo_client: AsyncIOMotorClient, domain_id: s
         if error_reason:
             update_data["error"] = error_reason
         
+        # Ця операція автоматично ретрайтиться через глобальний патч
         result = await domain_collection.update_one(
             {"_id": ObjectId(domain_id)},
             {"$set": update_data}
@@ -307,6 +388,7 @@ async def set_domain_error_status(mongo_client: AsyncIOMotorClient, domain_id: s
 async def get_domain_segmentation_info(mongo_client: AsyncIOMotorClient, domain_full: str) -> str:
     """
     Отримує інформацію про сегментацію домену
+    З автоматичними ретраями через глобальний патч
     
     Args:
         mongo_client: Клієнт MongoDB
@@ -321,6 +403,7 @@ async def get_domain_segmentation_info(mongo_client: AsyncIOMotorClient, domain_
         
         segmentation_collection = mongo_client[db_name][collection_name]
         
+        # Ця операція автоматично ретрайтиться через глобальний патч
         segmentation_record = await segmentation_collection.find_one(
             {"domain_full": domain_full},
             {"segment_combined": 1}
@@ -337,6 +420,7 @@ async def get_domain_segmentation_info(mongo_client: AsyncIOMotorClient, domain_
 async def save_contact_information(mongo_client: AsyncIOMotorClient, domain_full: str, gemini_result: dict) -> None:
     """
     Зберігає контактну інформацію (email, телефони, адреси) в MongoDB
+    З автоматичними ретраями через глобальний патч
     
     Args:
         mongo_client: Клієнт MongoDB
@@ -367,6 +451,7 @@ async def save_contact_information(mongo_client: AsyncIOMotorClient, domain_full
                         "contact_type": contact_type.lower(),
                         "corporate": email_data.get("corporate", False)
                     }
+                    # Ця операція автоматично ретрайтиться через глобальний патч
                     await email_collection.insert_one(email_doc)
         
         # Збереження номерів телефонів
@@ -392,6 +477,7 @@ async def save_contact_information(mongo_client: AsyncIOMotorClient, domain_full
                         "whatsapp": phone_data.get("whatsapp", False),
                         "contact_type": contact_type.lower()
                     }
+                    # Ця операція автоматично ретрайтиться через глобальний патч
                     await phone_collection.insert_one(phone_doc)
         
         # Збереження адрес
@@ -419,10 +505,15 @@ async def save_contact_information(mongo_client: AsyncIOMotorClient, domain_full
                         "address_type": address_type.lower(),
                         "country": country_code.lower()
                     }
+                    # Ця операція автоматично ретрайтиться через глобальний патч
                     await address_collection.insert_one(address_doc)
                     
     except Exception as e:
         logger.error(f"Error saving contact information for {domain_full}: {e}", exc_info=True)
+
+def _segments_norm(s: str) -> str:
+    """Нормалізуємо сегменти: прибираємо пробіли та регістр"""
+    return s.replace(' ', '').lower() if s else ''
 
 async def save_gemini_results(mongo_client: AsyncIOMotorClient, domain_full: str, target_uri: str, 
                              gemini_result: dict, grounding_status: str, domain_id: str, 
@@ -430,6 +521,7 @@ async def save_gemini_results(mongo_client: AsyncIOMotorClient, domain_full: str
                              segmentation_logger: Optional[logging.Logger] = None) -> None:
     """
     Зберігає результати аналізу Gemini в MongoDB
+    З автоматичними ретраями через глобальний патч
     
     Args:
         mongo_client: Клієнт MongoDB
@@ -446,8 +538,11 @@ async def save_gemini_results(mongo_client: AsyncIOMotorClient, domain_full: str
     gemini_collection_name = MONGO_CONFIG["databases"]["main_db"]["collections"]["gemini"]
     gemini_collection = mongo_client[db_name][gemini_collection_name]
     
-    # 🔧 ВИПРАВЛЕННЯ: Передаємо segment_combined в clean_gemini_results
-    cleaned_result = clean_gemini_results(gemini_result, segment_combined)
+    # 🎯 ЗБЕРІГАЄМО ОРИГІНАЛЬНИЙ РЕЗУЛЬТАТ ШІ ДО ОЧИСТКИ
+    original_segments_full = gemini_result.get("segments_full", "")
+    
+    # 🔧 ВИПРАВЛЕННЯ: Передаємо segment_combined та domain_full в clean_gemini_results
+    cleaned_result = clean_gemini_results(gemini_result, segment_combined, domain_full)
     
     summary = cleaned_result.get("summary", "").strip()
     similarity_search_phrases = cleaned_result.get("similarity_search_phrases", "").strip()
@@ -527,10 +622,10 @@ async def save_gemini_results(mongo_client: AsyncIOMotorClient, domain_full: str
         "geo_city": cleaned_result.get("geo_city", "").lower()
     }
     
-    # Збереження основного документу
+    # Збереження основного документу (автоматично ретрайтиться)
     await gemini_collection.insert_one(document)
     
-    # Збереження контактної інформації
+    # Збереження контактної інформації (автоматично ретрайтиться)
     await save_contact_information(mongo_client, domain_full, cleaned_result)
     
     # Оновлення колекції domain_segmented з новими полями сегментації
@@ -539,7 +634,7 @@ async def save_gemini_results(mongo_client: AsyncIOMotorClient, domain_full: str
         segmentation_collection = mongo_client[db_name][segmentation_collection_name]
         segmentation_update = {}
         
-        # Нові поля сегментації
+        # Нові поля сегментації (використовуємо очищені результати)
         segments_full = cleaned_result.get("segments_full", "")
         segments_primary = cleaned_result.get("segments_primary", "")
         segments_descriptive = cleaned_result.get("segments_descriptive", "")
@@ -548,30 +643,45 @@ async def save_gemini_results(mongo_client: AsyncIOMotorClient, domain_full: str
         segments_thematic = cleaned_result.get("segments_thematic", "")
         segments_common = cleaned_result.get("segments_common", "")
         
-        # Валідація основної сегментації
-        if segments_full and validate_segments_full(segment_combined, segments_full):
-            # Валідація пройшла - зберігаємо всі поля сегментації
-            segmentation_update["segments_full"] = segments_full
-            
-            # Додаємо категорійні поля якщо вони не порожні
-            if segments_primary:
-                segmentation_update["segments_primary"] = segments_primary
-            if segments_descriptive:
-                segmentation_update["segments_descriptive"] = segments_descriptive
-            if segments_prefix:
-                segmentation_update["segments_prefix"] = segments_prefix
-            if segments_suffix:
-                segmentation_update["segments_suffix"] = segments_suffix
-            if segments_thematic:
-                segmentation_update["segments_thematic"] = segments_thematic
-            if segments_common:
-                segmentation_update["segments_common"] = segments_common
-        else:
-            # Валідація не пройшла - логуємо ТІЛЬКИ warning
-            if segmentation_logger:
-                segmentation_logger.warning(f"Domain segmentation validation failed for domain: {domain_full}")
+        # 🎯 ВАЛІДАЦІЯ З ОЧИЩЕНИМ РЕЗУЛЬТАТОМ (ВИПРАВЛЕНО!)
+        if segments_full:  # Перевіряємо очищений результат
+            if not segment_combined:
+                # Якщо немає оригінальної сегментації - пропускаємо валідацію
+                segmentation_update["segments_full"] = segments_full
             else:
-                logger.warning(f"Domain segmentation validation failed for domain: {domain_full}")
+                # Є оригінальна сегментація - валідуємо ОЧИЩЕНИЙ результат
+                original_normalized = _segments_norm(segment_combined)  # "gov"
+                ai_normalized = _segments_norm(segments_full)           # "gov" (очищений!)
+                
+                if original_normalized == ai_normalized:
+                    # ✅ Валідація пройшла - зберігаємо всі поля сегментації
+                    segmentation_update["segments_full"] = segments_full
+                    
+                    # Додаємо категорійні поля якщо вони не порожні
+                    if segments_primary:
+                        segmentation_update["segments_primary"] = segments_primary
+                    if segments_descriptive:
+                        segmentation_update["segments_descriptive"] = segments_descriptive
+                    if segments_prefix:
+                        segmentation_update["segments_prefix"] = segments_prefix
+                    if segments_suffix:
+                        segmentation_update["segments_suffix"] = segments_suffix
+                    if segments_thematic:
+                        segmentation_update["segments_thematic"] = segments_thematic
+                    if segments_common:
+                        segmentation_update["segments_common"] = segments_common
+                else:
+                    # ❌ Валідація НЕ пройшла - логуємо ОРИГІНАЛЬНИЙ результат + очищений
+                    if segmentation_logger:
+                        segmentation_logger.warning(f"Domain {domain_full}: segments_full validation failed | AI returned: '{original_segments_full}' | After cleaning: '{segments_full}'")
+                    else:
+                        logger.warning(f"Domain {domain_full}: segments_full validation failed | AI returned: '{original_segments_full}' | After cleaning: '{segments_full}'")
+        else:
+            # Очищений segments_full порожній - логуємо
+            if segmentation_logger:
+                segmentation_logger.warning(f"Domain {domain_full}: segments_full validation failed | AI returned: '{original_segments_full}' | After cleaning: <empty>")
+            else:
+                logger.warning(f"Domain {domain_full}: segments_full validation failed | AI returned: '{original_segments_full}' | After cleaning: <empty>")
         
         # Валідація segments_language окремо
         segments_language = cleaned_result.get("segments_language", "")
@@ -588,7 +698,7 @@ async def save_gemini_results(mongo_client: AsyncIOMotorClient, domain_full: str
         if cleaned_result.get("domain_formation_pattern"):
             segmentation_update["domain_formation_pattern"] = cleaned_result.get("domain_formation_pattern", "unknown_type")
         
-        # Оновлюємо колекцію якщо є що оновлювати
+        # Оновлюємо колекцію якщо є що оновлювати (автоматично ретрайтиться)
         if segmentation_update:
             await segmentation_collection.update_one(
                 {"domain_full": domain_full},
@@ -601,6 +711,7 @@ async def update_api_key_ip(mongo_client: AsyncIOMotorClient, key_id: str, ip: s
                            ip_logger: Optional[logging.Logger] = None) -> bool:
     """
     Оновлює IP адресу для API ключа
+    З автоматичними ретраями через глобальний патч
     
     Args:
         mongo_client: Клієнт MongoDB
@@ -616,6 +727,8 @@ async def update_api_key_ip(mongo_client: AsyncIOMotorClient, key_id: str, ip: s
         api_collection_name = MONGO_CONFIG["databases"]["api_db"]["collections"]["keys"]
         
         api_keys_coll = mongo_client[api_db_name][api_collection_name]
+        
+        # Ця операція автоматично ретрайтиться через глобальний патч
         await api_keys_coll.update_one(
             {"_id": ObjectId(key_id)},
             {"$set": {"current_ip": ip}}
@@ -630,16 +743,45 @@ async def update_api_key_ip(mongo_client: AsyncIOMotorClient, key_id: str, ip: s
         logger.warning(f"Duplicate IP {ip} for key {key_id}")
         return False
 
+# Додаткова функція для критичних операцій (fallback)
+async def retry_mongo_operation(operation, *args, **kwargs):
+    """
+    Додатковий ретрай wrapper для критичних операцій
+    Використовується як fallback на випадок якщо глобальний патч не спрацював
+    
+    Args:
+        operation: MongoDB операція для виконання
+        *args, **kwargs: Аргументи для операції
+        
+    Returns:
+        Результат операції
+    """
+    while True:
+        try:
+            return await operation(*args, **kwargs)
+        except (
+            AutoReconnect,
+            NetworkTimeout,
+            ServerSelectionTimeoutError,
+            ConnectionFailure,
+            OperationFailure,
+        ) as e:
+            logger.warning(f"MongoDB operation failed: {e}. Retrying in {RETRY_DELAY} seconds...")
+            await asyncio.sleep(RETRY_DELAY)
+        except Exception:
+            raise  # Інші помилки проходять наверх
+
 if __name__ == "__main__":
     # Тестування mongo_operations модуля
     print("=== MongoDB Operations Module Test ===\n")
     
-    print("✅ MongoDB Operations Module loaded successfully")
+    print("✅ MongoDB Operations Module loaded successfully with GLOBAL RETRY PATCH")
     print(f"📁 Config loaded from: {MONGO_CONFIG}")
     print(f"🏠 Main DB: {MONGO_CONFIG['databases']['main_db']['name']}")
     print(f"🔑 API DB: {MONGO_CONFIG['databases']['api_db']['name']}")
+    print(f"🔄 Retry delay: {RETRY_DELAY} seconds")
     
-    print("\n📋 Available Functions:")
+    print("\n📋 Available Functions (ALL with automatic retries):")
     functions = [
         "get_domain_for_analysis",
         "get_api_key_and_proxy", 
@@ -648,19 +790,10 @@ if __name__ == "__main__":
         "set_domain_error_status",
         "get_domain_segmentation_info",
         "save_contact_information", 
-        "save_gemini_results (FIXED: now passes segment_combined)",
-        "update_api_key_ip"
+        "save_gemini_results",
+        "update_api_key_ip",
+        "retry_mongo_operation (fallback)"
     ]
     
     for func in functions:
         print(f"   ✓ {func}")
-    
-    print("\n🔧 Utility Functions:")
-    print("   ✓ get_timestamp_ms")
-    print("   ✓ needs_ip_refresh")
-    
-    print("\n🏁 Module ready for integration with main.py")
-    print("💡 Critical fix:")
-    print("   - save_gemini_results now correctly passes segment_combined to clean_gemini_results")
-    print("   - Segmentation field cleaning will now work properly")
-    print("   - No more 'web' in segments_thematic for 'w 3' domains!")

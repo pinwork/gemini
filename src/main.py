@@ -725,7 +725,6 @@ async def main():
     try:
         print(f"🚀 Starting {CONCURRENT_WORKERS} workers...")
         print(f"🧪 Model configuration: Stage1={STAGE1_MODEL} | Stage2={STAGE2_MODEL}")
-        print(f"🔧 New segmentation logic enabled")
         
         workers = [
             asyncio.create_task(worker(worker_id))

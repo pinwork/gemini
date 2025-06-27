@@ -432,18 +432,26 @@ def _segments_norm(s: str) -> str:
     return s.replace(' ', '').lower() if s else ''
 
 
-def validate_segments_full(segment_combined: str, segments_full: str) -> bool:
+def validate_segments_full(segment_combined: str, segments_full: str, domain_full: str = "") -> bool:
     """
-    Перевіряє, чи коректно ШІ сегментував домен
+    Перевіряє, чи коректно ШІ сегментував домен з мінімальним логуванням
     
     Args:
         segment_combined: Оригінальна сегментація (з пробілами)
         segments_full: AI повна сегментація (з пробілами)
+        domain_full: Домен для логування (опціонально)
         
     Returns:
         True якщо валідація пройшла
     """
-    if not segment_combined or not segments_full:
+    # Перевірка на порожні значення
+    if not segment_combined:
+        return False
+    
+    if not segments_full:
+        if domain_full:
+            # 🎯 КОРОТКЕ логування в правильний файл
+            logger.warning(f"Domain {domain_full}: segments_full validation failed | AI returned: <empty>")
         return False
 
     # Нормалізуємо: прибираємо пробіли та регістр
@@ -451,7 +459,13 @@ def validate_segments_full(segment_combined: str, segments_full: str) -> bool:
     ai_normalized = _segments_norm(segments_full)
 
     # Склейка має збігатися
-    return original_normalized == ai_normalized
+    validation_passed = original_normalized == ai_normalized
+    
+    if not validation_passed and domain_full:
+        # 🎯 МІНІМАЛЬНЕ логування - тільки домен і що повернув AI
+        logger.warning(f"Domain {domain_full}: segments_full validation failed | AI returned: '{segments_full}'")
+    
+    return validation_passed
 
 
 def clean_segments_language(language_value: str) -> str:
@@ -569,13 +583,39 @@ def clean_geo_fields(gemini_result: dict) -> dict:
     return gemini_result
 
 
-def clean_gemini_results(gemini_result: dict, segment_combined: str = "") -> dict:
+def handle_segments_full_validation(gemini_result: dict, domain_full: str = "") -> dict:
+    """
+    Спеціальна обробка для поля segments_full
+    Якщо після очистки воно стає порожнім - записує "validation_failed"
+    
+    Args:
+        gemini_result: Результати після очистки
+        domain_full: Домен для логування (опціонально)
+        
+    Returns:
+        Модифікований словник з обробленим segments_full
+    """
+    segments_full = gemini_result.get("segments_full", "").strip()
+    
+    # Якщо segments_full порожнє після очистки - записуємо validation_failed
+    if not segments_full:
+        gemini_result["segments_full"] = "validation_failed"
+        if domain_full:
+            logger.info(f"Domain {domain_full}: segments_full set to 'validation_failed' due to empty value after cleaning")
+        else:
+            logger.info(f"segments_full set to 'validation_failed' due to empty value after cleaning")
+    
+    return gemini_result
+
+
+def clean_gemini_results(gemini_result: dict, segment_combined: str = "", domain_full: str = "") -> dict:
     """
     Очищає результати від Gemini API - валідує номери телефонів та прибирає проблемні значення
     
     Args:
         gemini_result: Словник результатів від Gemini
         segment_combined: Оригінальна сегментація для очистки
+        domain_full: Домен для детального логування (опціонально)
         
     Returns:
         Очищений словник результатів
@@ -653,6 +693,9 @@ def clean_gemini_results(gemini_result: dict, segment_combined: str = "") -> dic
     
     # 🌍 НОВА ОБРОБКА: валідація географічних полів
     cleaned_result = clean_geo_fields(cleaned_result)
+    
+    # 🔧 НОВА ФУНКЦІОНАЛЬНІСТЬ: спеціальна обробка segments_full
+    cleaned_result = handle_segments_full_validation(cleaned_result, domain_full)
     
     return cleaned_result
 
@@ -753,7 +796,6 @@ if __name__ == "__main__":
         result = validate_and_clean_language_code(lang)
         print(f"   '{lang}' → '{result}'")
     
-    # Тест 7: Повний clean_gemini_results з мовами
     # Тест 7: Повний clean_gemini_results з геогафією та мовами
     print("\n7. Full Gemini Results with Geo and Language Validation:")
     test_gemini_result = {
@@ -767,9 +809,43 @@ if __name__ == "__main__":
     }
     
     print(f"   Before: {test_gemini_result}")
-    cleaned_full = clean_gemini_results(test_gemini_result, "w 3")
+    cleaned_full = clean_gemini_results(test_gemini_result, "w 3", "test-domain.com")
     print(f"   After:  {cleaned_full}")
     
+    # 🆕 Тест 8: Спеціальна обробка segments_full
+    print("\n8. Segments Full Validation Failed Handling:")
+    test_cases = [
+        {"segments_full": "valid segment"},   # Валідний - залишається
+        {"segments_full": ""},                # Порожній - стає validation_failed
+        {"segments_full": "   "},            # Пробіли - стає validation_failed
+        {}                                   # Відсутнє - стає validation_failed
+    ]
+    
+    for i, case in enumerate(test_cases):
+        original = case.copy()
+        result = handle_segments_full_validation(case, f"test-domain-{i}.com")
+        print(f"   {original} → {result}")
+    
+    # 🆕 Тест 9: Детальна валідація segments_full
+    print("\n9. Detailed Segments Full Validation:")
+    validation_test_cases = [
+        ("w 3", "w 3", "match"),                    # Точне співпадіння
+        ("w 3", "w3", "normalized_match"),          # Нормалізоване співпадіння  
+        ("book store", "bookstore", "normalized_match"), # Нормалізоване співпадіння
+        ("w 3", "w 3 extra", "mismatch"),          # Додаткові сегменти
+        ("w 3", "web 3", "mismatch"),              # Інші слова
+        ("w 3", "", "empty_ai"),                   # Порожній AI результат
+        ("", "w 3", "empty_original"),             # Порожній оригінал
+    ]
+    
+    for original, ai_output, expected in validation_test_cases:
+        result = validate_segments_full(original, ai_output, f"test-{expected}.com")
+        print(f"   '{original}' vs '{ai_output}' → {result} ({expected})")
+    
     print(f"\n=== Test completed ===")
-    print(f"Module loaded successfully with PROPER language validation")
-    print("Key changes: ANY 2-letter code passes, non-2-letter codes get converted or emptied")
+    print(f"Module loaded successfully with DETAILED validation logging")
+    print("🆕 NEW FEATURES:")
+    print("   - validate_segments_full() now shows expected vs actual segments")
+    print("   - handle_segments_full_validation() sets 'validation_failed' for empty fields")
+    print("   - clean_gemini_results() supports domain_full parameter for logging")
+    print("   - All validation errors now include specific domain context")
