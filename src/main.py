@@ -42,7 +42,7 @@ from utils.mongo_operations import (
 from utils.validation_utils import (
     has_access_issues, validate_country_code, validate_email, validate_phone_e164,
     validate_segments_language, clean_gemini_results, normalize_url, validate_url_field,
-    format_summary, clean_it_prefix, validate_ai_segmentation, clean_phone_for_validation
+    format_summary, clean_it_prefix, validate_segments_full, clean_phone_for_validation
 )
 from utils.logging_config import (
     setup_all_loggers, log_success_timing, log_rate_limit, log_http_error,
@@ -431,10 +431,12 @@ async def analyze_website_stage1(target_uri: str, api_key: str, proxy_config: Pr
             "response_time": response_time
         }
 
-async def analyze_website_stage2(target_uri: str, text_content: str, api_key: str, proxy_config: ProxyConfig, segment_combined: str = "") -> dict:
+async def analyze_website_stage2(target_uri: str, text_content: str, api_key: str, proxy_config: ProxyConfig, 
+                                segment_combined: str = "", domain_full: str = "") -> dict:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{STAGE2_MODEL}:generateContent?key={api_key}"
     
-    current_system_prompt = generate_system_prompt(segment_combined)
+    # Передаємо обидва параметри в generate_system_prompt
+    current_system_prompt = generate_system_prompt(segment_combined, domain_full)
     
     user_message = f"Analyze content review of website {target_uri}: {text_content}"
     
@@ -678,7 +680,11 @@ async def worker(worker_id: int):
                     continue
                 
                 try:
-                    stage2_result = await controlled_stage2_request(analyze_website_stage2, target_uri, text_response, api_key2, working_proxy2, segment_combined)
+                    # Передаємо domain_full в analyze_website_stage2
+                    stage2_result = await controlled_stage2_request(
+                        analyze_website_stage2, target_uri, text_response, api_key2, working_proxy2, 
+                        segment_combined, domain_full
+                    )
                     await handle_stage_result(mongo_client, worker_id, "Stage2", api_key2, target_uri, working_proxy2, key_record_id2, stage2_result)
                     
                     if stage2_result.get("success"):
@@ -719,6 +725,7 @@ async def main():
     try:
         print(f"🚀 Starting {CONCURRENT_WORKERS} workers...")
         print(f"🧪 Model configuration: Stage1={STAGE1_MODEL} | Stage2={STAGE2_MODEL}")
+        print(f"🔧 New segmentation logic enabled")
         
         workers = [
             asyncio.create_task(worker(worker_id))

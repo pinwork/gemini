@@ -17,7 +17,7 @@ try:
     from .validation_utils import (
         has_access_issues, validate_country_code, validate_email, validate_phone_e164,
         validate_segments_language, clean_gemini_results, validate_url_field,
-        validate_ai_segmentation
+        validate_segments_full
     )
 except ImportError:
     # Fallback для прямого запуску
@@ -27,7 +27,7 @@ except ImportError:
     from utils.validation_utils import (
         has_access_issues, validate_country_code, validate_email, validate_phone_e164,
         validate_segments_language, clean_gemini_results, validate_url_field,
-        validate_ai_segmentation
+        validate_segments_full
     )
 
 # Константи модуля
@@ -532,39 +532,50 @@ async def save_gemini_results(mongo_client: AsyncIOMotorClient, domain_full: str
     # Збереження контактної інформації
     await save_contact_information(mongo_client, domain_full, cleaned_result)
     
-    # Оновлення колекції domain_segmented з новими полями
+    # Оновлення колекції domain_segmented з новими полями сегментації
     try:
         segmentation_collection_name = MONGO_CONFIG["databases"]["main_db"]["collections"]["domain_segmented"]
         segmentation_collection = mongo_client[db_name][segmentation_collection_name]
         segmentation_update = {}
         
-        # Валідація AI сегментації
-        ai_semantic_segmentation = cleaned_result.get("ai_semantic_segmentation", "")
-        domain_thematic_parts = cleaned_result.get("domain_thematic_parts", "")
-        domain_generic_parts = cleaned_result.get("domain_generic_parts", "")
+        # Нові поля сегментації
+        segments_full = cleaned_result.get("segments_full", "")
+        segments_primary = cleaned_result.get("segments_primary", "")
+        segments_descriptive = cleaned_result.get("segments_descriptive", "")
+        segments_prefix = cleaned_result.get("segments_prefix", "")
+        segments_suffix = cleaned_result.get("segments_suffix", "")
+        segments_thematic = cleaned_result.get("segments_thematic", "")
+        segments_common = cleaned_result.get("segments_common", "")
         
-        # Отримуємо segment_combined для валідації
-        if segment_combined and validate_ai_segmentation(
-            segment_combined, 
-            ai_semantic_segmentation, 
-            domain_thematic_parts, 
-            domain_generic_parts
-        ):
-            # Валідація пройшла - зберігаємо всі поля
-            segmentation_update["ai_semantic_segmentation"] = ai_semantic_segmentation
-            segmentation_update["domain_thematic_parts"] = domain_thematic_parts
-            segmentation_update["domain_generic_parts"] = domain_generic_parts
+        # Валідація основної сегментації
+        if segments_full and validate_segments_full(segment_combined, segments_full):
+            # Валідація пройшла - зберігаємо всі поля сегментації
+            segmentation_update["segments_full"] = segments_full
+            
+            # Додаємо категорійні поля якщо вони не порожні
+            if segments_primary:
+                segmentation_update["segments_primary"] = segments_primary
+            if segments_descriptive:
+                segmentation_update["segments_descriptive"] = segments_descriptive
+            if segments_prefix:
+                segmentation_update["segments_prefix"] = segments_prefix
+            if segments_suffix:
+                segmentation_update["segments_suffix"] = segments_suffix
+            if segments_thematic:
+                segmentation_update["segments_thematic"] = segments_thematic
+            if segments_common:
+                segmentation_update["segments_common"] = segments_common
             
             if segmentation_logger:
-                segmentation_logger.info(f"AI segmentation validation passed for domain: {domain_full}")
+                segmentation_logger.info(f"Domain segmentation validation passed for domain: {domain_full}")
             else:
-                logger.info(f"AI segmentation validation passed for domain: {domain_full}")
+                logger.info(f"Domain segmentation validation passed for domain: {domain_full}")
         else:
             # Валідація не пройшла
             if segmentation_logger:
-                segmentation_logger.warning(f"AI segmentation validation failed for domain: {domain_full}")
+                segmentation_logger.warning(f"Domain segmentation validation failed for domain: {domain_full}")
             else:
-                logger.warning(f"AI segmentation validation failed for domain: {domain_full}")
+                logger.warning(f"Domain segmentation validation failed for domain: {domain_full}")
         
         # Валідація segments_language окремо
         segments_language = cleaned_result.get("segments_language", "")
@@ -581,9 +592,11 @@ async def save_gemini_results(mongo_client: AsyncIOMotorClient, domain_full: str
             else:
                 logger.warning(f"Invalid segments_language '{segments_language}' for domain: {domain_full} - not saved")
         
+        # Додаємо domain_formation_pattern якщо присутній
         if cleaned_result.get("domain_formation_pattern"):
-            segmentation_update["domain_formation_pattern"] = cleaned_result.get("domain_formation_pattern", "unclear_formation")
+            segmentation_update["domain_formation_pattern"] = cleaned_result.get("domain_formation_pattern", "unknown_type")
         
+        # Оновлюємо колекцію якщо є що оновлювати
         if segmentation_update:
             await segmentation_collection.update_one(
                 {"domain_full": domain_full},
@@ -643,7 +656,7 @@ if __name__ == "__main__":
         "set_domain_error_status",
         "get_domain_segmentation_info",
         "save_contact_information", 
-        "save_gemini_results (with keyword loggers)",
+        "save_gemini_results (with new segmentation fields)",
         "update_api_key_ip"
     ]
     

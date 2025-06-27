@@ -9,8 +9,8 @@ from urllib.parse import urlparse, urlunparse
 # Константи
 URL_FIELDS = ["blog_url", "recruits_affiliates_url", "contact_page_url", "api_documentation_url"]
 
-# Налаштування логера для validation_utils
-logger = logging.getLogger("validation_utils")
+# Налаштування логера для validation_utils (використовуємо segmentation_validation)
+logger = logging.getLogger("segmentation_validation")
 
 
 def clean_phone_for_validation(phone: str) -> str:
@@ -319,22 +319,9 @@ def validate_url_field(url_value: str, target_uri: str) -> str:
     return normalized_url
 
 
-def _ai_norm(s: str) -> str:
+def _segments_norm(s: str) -> str:
     """
-    Нормалізуємо відповідь ШІ: дефіси → пробіли, далі прибираємо усі пробіли та регістр
-    
-    Args:
-        s: Рядок для нормалізації
-        
-    Returns:
-        Нормалізований рядок
-    """
-    return re.sub(r'\s+', '', s.replace('-', ' ').lower()) if s else ''
-
-
-def _orig_norm(s: str) -> str:
-    """
-    Нормалізуємо segment_combined: прибираємо пробіли та регістр
+    Нормалізуємо сегменти: прибираємо пробіли та регістр
     
     Args:
         s: Рядок для нормалізації
@@ -345,66 +332,115 @@ def _orig_norm(s: str) -> str:
     return s.replace(' ', '').lower() if s else ''
 
 
-def _in(base: str, w: str) -> bool:
-    """
-    Чи входить слово w (ігноруючи пробіли/дефіси) у base
-    
-    Args:
-        base: Базовий рядок
-        w: Слово для пошуку
-        
-    Returns:
-        True якщо слово входить в базовий рядок
-    """
-    return re.sub(r'[\s\-]+', '', w.lower()) in base
-
-
-def validate_ai_segmentation(segment_combined: str,
-                             ai_semantic_segmentation: str,
-                             domain_thematic_parts: str,
-                             domain_generic_parts: str) -> bool:
+def validate_segments_full(segment_combined: str, segments_full: str) -> bool:
     """
     Перевіряє, чи коректно ШІ сегментував домен
     
     Args:
-        segment_combined: Оригінальна сегментація
-        ai_semantic_segmentation: AI сегментація
-        domain_thematic_parts: Тематичні частини
-        domain_generic_parts: Загальні частини
+        segment_combined: Оригінальна сегментація (з пробілами)
+        segments_full: AI повна сегментація (з пробілами)
         
     Returns:
         True якщо валідація пройшла
     """
-    if not segment_combined or not ai_semantic_segmentation:
+    if not segment_combined or not segments_full:
         return False
 
-    base = _orig_norm(segment_combined)
-    ai = _ai_norm(ai_semantic_segmentation)
+    # Нормалізуємо: прибираємо пробіли та регістр
+    original_normalized = _segments_norm(segment_combined)
+    ai_normalized = _segments_norm(segments_full)
 
-    # 1️⃣ Склейка має збігатися
-    if base != ai:
-        return False
-
-    # 2️⃣ Тематичні та 3️⃣ загальні слова повинні міститися в оригіналі
-    for part in (domain_thematic_parts, domain_generic_parts):
-        if part:
-            for w in part.split():
-                if w and not _in(base, w):
-                    return False
-    return True
+    # Склейка має збігатися
+    return original_normalized == ai_normalized
 
 
-def clean_gemini_results(gemini_result: dict) -> dict:
+def clean_segments_language(language_value: str) -> str:
+    """
+    Очищає segments_language від подвійних значень
+    
+    Args:
+        language_value: Значення мови (може бути "en en")
+        
+    Returns:
+        Очищене значення ("en")
+    """
+    if not language_value:
+        return language_value
+    
+    # Розділяємо на слова, прибираємо дублікати, з'єднуємо
+    unique_parts = list(dict.fromkeys(language_value.split()))
+    return ' '.join(unique_parts) if len(unique_parts) > 1 else unique_parts[0] if unique_parts else ""
+
+
+def clean_all_segmentation_fields(segment_combined: str, gemini_result: dict) -> dict:
+    """
+    Очищає ВСІ поля сегментації від сегментів що не входять в domain_core
+    
+    Args:
+        segment_combined: Оригінальна сегментація domain_core
+        gemini_result: Результати від Gemini
+        
+    Returns:
+        Очищений словник з валідними сегментами
+    """
+    if not segment_combined:
+        return gemini_result
+    
+    # Генеруємо domain_core segments (джерело правди)
+    valid_segments = set(segment_combined.split())
+    
+    # Очищаємо ВСІ сегментаційні поля однаково
+    segmentation_fields = [
+        "segments_full", "segments_primary", "segments_descriptive", 
+        "segments_prefix", "segments_suffix", "segments_thematic", "segments_common"
+    ]
+    
+    for field_name in segmentation_fields:
+        if field_name in gemini_result:
+            field_value = gemini_result[field_name]
+            if field_value:
+                # Залишаємо тільки сегменти що входять в domain_core
+                cleaned_segments = [seg for seg in field_value.split() 
+                                  if seg in valid_segments]
+                gemini_result[field_name] = " ".join(cleaned_segments)
+    
+    return gemini_result
+
+
+def clean_segmentation_field(field_value: str, field_name: str) -> str:
+    """
+    Очищає поле сегментації від проблемних значень
+    
+    Args:
+        field_value: Значення поля
+        field_name: Назва поля
+        
+    Returns:
+        Очищене значення або порожній рядок
+    """
+    if not field_value or has_access_issues(field_value, field_name):
+        return ""
+    return field_value.strip()
+
+
+def clean_gemini_results(gemini_result: dict, segment_combined: str = "") -> dict:
     """
     Очищає результати від Gemini API - валідує номери телефонів та прибирає проблемні значення
     
     Args:
         gemini_result: Словник результатів від Gemini
+        segment_combined: Оригінальна сегментація для очистки
         
     Returns:
         Очищений словник результатів
     """
     cleaned_result = {}
+    
+    # Список нових полів сегментації
+    segmentation_fields = [
+        "segments_full", "segments_primary", "segments_descriptive", 
+        "segments_prefix", "segments_suffix", "segments_thematic", "segments_common"
+    ]
     
     for key, value in gemini_result.items():
         if key == "phone_list" and isinstance(value, list):
@@ -437,7 +473,14 @@ def clean_gemini_results(gemini_result: dict) -> dict:
             
             cleaned_result[key] = validated_phones
         elif isinstance(value, str):
-            if has_access_issues(value, key):
+            if key == "segments_language":
+                # Спеціальна очистка для segments_language
+                cleaned_lang = clean_segments_language(value)
+                cleaned_result[key] = cleaned_lang
+            elif key in segmentation_fields:
+                # Спеціальна обробка для полів сегментації
+                cleaned_result[key] = clean_segmentation_field(value, key)
+            elif has_access_issues(value, key):
                 cleaned_result[key] = ""
             elif key == "summary":
                 cleaned_result[key] = format_summary(clean_it_prefix(value))
@@ -449,6 +492,10 @@ def clean_gemini_results(gemini_result: dict) -> dict:
             cleaned_result[key] = value
         else:
             cleaned_result[key] = value
+    
+    # Застосовуємо очистку сегментаційних полів
+    if segment_combined:
+        cleaned_result = clean_all_segmentation_fields(segment_combined, cleaned_result)
     
     return cleaned_result
 
@@ -487,68 +534,45 @@ if __name__ == "__main__":
         result = has_access_issues(text)
         print(f"   '{text}' → Has issues: {result}")
     
-    # Тест 3: Телефонна валідація
-    print("\n3. Phone Number Validation (E164):")
-    test_phones = [
-        "+1234567890",
-        "+380501234567", 
-        "1234567890",     # Missing +
-        "+12345",         # Too short
-        "+123456789012345678",  # Too long
-        ""
+    # Тест 3: Очистка segments_language
+    print("\n3. Segments Language Cleaning:")
+    test_languages = [
+        "en en",
+        "de de de",
+        "mixed",
+        "en fr", 
+        "unknown"
     ]
-    for phone in test_phones:
-        result = validate_phone_e164(phone)
-        print(f"   '{phone}' → {result}")
+    for lang in test_languages:
+        result = clean_segments_language(lang)
+        print(f"   '{lang}' → '{result}'")
     
-    # Тест 4: Очистка телефонів
-    print("\n4. Phone Cleaning:")
-    dirty_phones = [
-        "(555) 123-4567",
-        "555.123.4567",
-        " +1 555 123 4567 ",
-        "123-456-7890"
-    ]
-    for phone in dirty_phones:
-        cleaned = clean_phone_for_validation(phone)
-        print(f"   '{phone}' → '{cleaned}'")
+    # Тест 4: Очистка всіх сегментаційних полів
+    print("\n4. Segmentation Fields Cleaning:")
+    test_data = {
+        "segments_full": "w 3 web",
+        "segments_primary": "w web", 
+        "segments_thematic": "w web tech"
+    }
+    segment_combined = "w 3"
     
-    # Тест 5: Форматування summary
-    print("\n5. Summary Formatting:")
-    test_summaries = [
-        "payment platform providing secure transactions",
-        "This platform offers financial services.",
-        "secure messaging app"
-    ]
-    for summary in test_summaries:
-        formatted = format_summary(summary)
-        print(f"   '{summary}' → '{formatted}'")
+    print(f"   Original: {test_data}")
+    cleaned = clean_all_segmentation_fields(segment_combined, test_data.copy())
+    print(f"   Cleaned:  {cleaned}")
     
-    # Тест 6: AI сегментація валідація
-    print("\n6. AI Segmentation Validation:")
-    test_cases = [
-        ("book store", "book store", "book", "store"),      # Valid
-        ("bookstore", "book store", "book", "store"),       # Valid  
-        ("example", "test fail", "test", "fail"),           # Invalid
-        ("techstart", "tech start", "tech", "start")        # Valid
-    ]
-    for orig, ai_seg, thematic, generic in test_cases:
-        result = validate_ai_segmentation(orig, ai_seg, thematic, generic)
-        print(f"   '{orig}' → AI:'{ai_seg}' T:'{thematic}' G:'{generic}' → {result}")
+    # Тест 5: Повний clean_gemini_results
+    print("\n5. Full Gemini Results Cleaning:")
+    test_gemini_result = {
+        "segments_full": "w 3 web",
+        "segments_language": "en en",
+        "segments_thematic": "w web tech",
+        "summary": "test platform"
+    }
     
-    # Тест 7: URL валідація
-    print("\n7. URL Validation:")
-    test_urls = [
-        "https://example.com/blog",
-        "http://site.org/contact", 
-        "invalid-url",
-        "ftp://not-supported.com",
-        ""
-    ]
-    target = "https://example.com"
-    for url in test_urls:
-        result = validate_url_field(url, target)
-        print(f"   '{url}' → '{result}'")
+    print(f"   Before: {test_gemini_result}")
+    cleaned_full = clean_gemini_results(test_gemini_result, "w 3")
+    print(f"   After:  {cleaned_full}")
     
     print(f"\n=== Test completed ===")
-    print(f"Module loaded successfully with {len(globals())} functions")
+    print(f"Module loaded successfully with new cleaning logic")
+    print("Key changes: segments cleaning, language deduplication, unified validation")

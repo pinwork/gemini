@@ -13,39 +13,55 @@
       "type": "string",
       "description": "Single precise 4-5 word phrase capturing core business essence for maximum vector similarity accuracy."
     },
-    "ai_semantic_segmentation": {
+    "segments_full": {
       "type": "string",
-      "description": "Corrected domain segmentation with words separated by spaces. Must reconstruct original domain when joined. If unsegmentable, return original domain core."
+      "description": "Complete domain segmentation with words separated by spaces. Must reconstruct original domain when joined."
     },
-    "domain_thematic_parts": {
+    "segments_primary": {
       "type": "string",
-      "description": "Space-separated industry/business-specific terms from domain segmentation that carry core meaning and business context. Used for generating similar themed domains."
+      "description": "Main nouns that carry core business meaning."
     },
-    "domain_generic_parts": {
+    "segments_descriptive": {
       "type": "string",
-      "description": "Space-separated theme-neutral words from domain segmentation commonly used across different industries to secure available domains. Exclude brands, abbreviations, random sequences."
+      "description": "Adjectives and descriptive words that modify primary segments."
+    },
+    "segments_prefix": {
+      "type": "string",
+      "description": "Reusable word prefixes."
+    },
+    "segments_suffix": {
+      "type": "string",
+      "description": "Reusable word suffixes."
+    },
+    "segments_thematic": {
+      "type": "string",
+      "description": "Words that specifically match website's topic or industry."
+    },
+    "segments_common": {
+      "type": "string",
+      "description": "Popular word components that could fit any domain as universal parts."
     },
     "segments_language": {
       "type": "string",
-      "description": "Language of domain segments using ISO 639-1 codes. Analyze the language origin of segmented words. Examples: 'buchhandlung.de' segmented as 'buch handlung' = 'de' (German words), 'bookstore.com' segmented as 'book store' = 'en' (English words). Use 'mixed' for multiple languages, 'unknown' for unidentifiable terms."
+      "description": "Language of domain segments using ISO 639-1 codes, 'mixed' or 'unknown'."
     },
     "domain_formation_pattern": {
       "type": "string",
-      "description": "Pattern used to construct the domain name",
+      "description": "Dominant linguistic method used to create the domain-core word.",
       "enum": [
-        "dictionary_word",
-        "compound_words",
-        "coined_word",
-        "portmanteau",
-        "truncated_word",
+        "single_word",
+        "compound_word",
+        "blend_portmanteau",
+        "clipped_word",
+        "invented_word",
         "acronym",
         "initialism",
         "personal_name",
-        "geographic_name",
-        "numeric_hybrid",
-        "transliterated",
-        "hybrid_formation",
-        "unclear_formation"
+        "geo_name",
+        "alphanumeric",
+        "transliteration",
+        "mixed_type",
+        "unknown_type"
       ]
     },
     "b2c_detected": {
@@ -313,9 +329,7 @@
     "summary",
     "similarity_search_phrases",
     "vector_search_phrase",
-    "ai_semantic_segmentation",
-    "domain_thematic_parts",
-    "domain_generic_parts",
+    "segments_full",
     "segments_language",
     "domain_formation_pattern",
     "b2c_detected",

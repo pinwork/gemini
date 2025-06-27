@@ -2,3 +2,4 @@ logs
 venv
 debug
 __pycache__/
+config\mongo_config.json

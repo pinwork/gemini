@@ -149,15 +149,28 @@ base_sections = [
     
     "For SIMILARITY_SEARCH_PHRASES: Build 3-4 keyword phrases for finding similar websites. Focus on core business function + industry/technology. Use specific terms, avoid brand names and generic words. Example: project management software, team collaboration, task tracking platform, agile workflow tools, etc.",
     
-    "DOMAIN FORMATION ANALYSIS:",
-    "For this website, automatic segmentation algorithms suggested: \"{segment_combined}\"",
-    "However, I am not confident this segmentation is correct. These algorithms are based on English dictionary patterns and ignore business context, domain owner's logic, and industry-specific or non-English terminology.",
-    "Your task is to provide semantically correct segmentation by understanding the website owner's perspective. Analyze the website content to determine what words the owner likely intended when creating this domain name. Return properly segmented words separated by spaces that reconstruct the domain core when joined without spaces. Ignore any hyphens in the domain core for segmentation purposes. Preserve non-English words as-is.",
-    "CRITICAL: Domain Formation Classification. This data will be used for generating similar domain names, so professional analysis approach is essential. From your corrected segmentation, classify the domain formation pattern using one of these types:",
-    "FORMATION PATTERNS - dictionary_word (existing word), compound_words (real words combined), coined_word (invented word), portmanteau (word parts merged), truncated_word (shortened word), acronym (pronounceable initials), initialism (spelled-out letters), personal_name (person's name), geographic_name (place name), numeric_hybrid (includes numbers), transliterated (from other language), hybrid_formation (mixed patterns), unclear_formation (cannot determine).",
-    "THEMATIC PARTS - Words directly related to the website's industry, business theme, or service specifics. These parts must be tightly thematically connected to the site's topic or industry and carry the core business meaning.",
-    "GENERIC PARTS - Common words frequently used across different domain themes to help secure available domain names. These are theme-neutral but add naming variety. Examples: smart, pro, hub, global, new, plus, max, etc.",
-    "EXCLUDE from both categories: Brand names, abbreviations (unless industry-standard), random letter/number combinations, meaningless sequences, proper names. If no words fit either category, leave respective fields empty."
+    "DOMAIN SEGMENTATION:",
+    "Website: {domain_full}",
+    "Domain core: {domain_core}",
+    "Split domain core into space-separated semantic words for segments_full field. If domain cannot be meaningfully segmented, return original as single segment.",
+    "EXAMPLES:",
+    "bookstore.com (domain_core 'bookstore' we split into 'book store')",
+    "web24market.com (domain_core 'web24market' we split into 'web 24 market')",
+    "preshopify.com (domain_core 'preshopify' we split into 'pre shop ify')",
+    "IMPORTANT: When joined without spaces, segments must recreate original domain core exactly.",
+    "SEGMENT CATEGORIZATION:",
+    "Distribute only the previously split segments from segments_full into appropriate categories. Do not invent new segments. A segment can appear in multiple fields if it logically fits their definitions. If multiple segments fit one category, separate with spaces. Leave fields empty if no segments fit clearly.",
+    "STRUCTURAL CATEGORIES:",
+    "Primary segments: Main nouns carrying core business meaning (shop, market, food, web)",
+    "Descriptive segments: Adjectives that modify main words (fast, smart, quick)",
+    "Prefix segments: Word prefixes that could be reused (pre, super, mega)",
+    "Suffix segments: Word suffixes that could be reused (ify, ly, er)",
+    "SEMANTIC CATEGORIES:",
+    "Additionally, segments can be classified as thematic vs common:",
+    "Thematic segments: Words that specifically match website's topic or industry",
+    "Common segments: Popular word components that could fit any domain as universal parts",
+    "SEGMENT LANGUAGE:",
+    "Identify the language of the actual words used in domain segments. Use ISO 639-1 codes (en, de, fr), 'mixed' for multiple languages, 'unknown' for unidentifiable terms."
 ]
 
 # Критичні слова які не підлягають заміні
@@ -216,28 +229,34 @@ def _apply_words(text: str) -> str:
     return text
 
 
-def generate_system_prompt(segment_combined: str = "") -> str:
+def generate_system_prompt(segment_combined: str = "", domain_full: str = "") -> str:
     """
     Генерує системний промпт для другого етапу аналізу веб-сайту
     
     Args:
         segment_combined: Сегментований домен для аналізу (наприклад, "book store")
+        domain_full: Повний домен (наприклад, "bookstore.com")
         
     Returns:
         Згенерований системний промпт для stage2
     """
-    # Підставляємо segment_combined в базові секції
-    sections_with_segment = []
+    # Генеруємо domain_core зі склеювання segment_combined
+    domain_core = segment_combined.replace(" ", "") if segment_combined else ""
+    
+    # Підставляємо змінні в базові секції
+    sections_with_variables = []
     for section in base_sections:
-        if "{segment_combined}" in section:
-            sections_with_segment.append(section.format(segment_combined=segment_combined))
+        if "{domain_full}" in section:
+            sections_with_variables.append(section.format(domain_full=domain_full))
+        elif "{domain_core}" in section:
+            sections_with_variables.append(section.format(domain_core=domain_core))
         else:
-            sections_with_segment.append(section)
+            sections_with_variables.append(section)
     
     # Застосовуємо варіації фраз і слів
     txt = " ".join(
         _apply_words(random.choice(phrase_variations[s]) if s in phrase_variations else s)
-        for s in sections_with_segment
+        for s in sections_with_variables
     )
     
     # Застосовуємо фікси для типових помилок
@@ -253,11 +272,14 @@ def generate_system_prompt(segment_combined: str = "") -> str:
 
 if __name__ == "__main__":
     # Тестування модуля з прикладом сегментації
-    test_segment = "example test domain"
-    system_prompt = generate_system_prompt(test_segment)
+    test_segment = "book store"
+    test_domain = "bookstore.com"
+    system_prompt = generate_system_prompt(test_segment, test_domain)
     print("Generated Stage2 System Prompt:")
     print("=" * 50)
     print(f"Test segment: '{test_segment}'")
+    print(f"Test domain: '{test_domain}'")
+    print(f"Generated domain_core: '{test_segment.replace(' ', '')}'")
     print("=" * 50)
     print(system_prompt)
     print("=" * 50)
