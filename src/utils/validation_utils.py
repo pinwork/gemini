@@ -12,6 +12,29 @@ URL_FIELDS = ["blog_url", "recruits_affiliates_url", "contact_page_url", "api_do
 # Налаштування логера для validation_utils (використовуємо segmentation_validation)
 logger = logging.getLogger("segmentation_validation")
 
+# Популярні назви мов для конвертації
+LANGUAGE_NAME_TO_CODE = {
+    # Англійські назви
+    "english": "en", "german": "de", "japanese": "ja", "french": "fr", "spanish": "es",
+    "indonesian": "id", "russian": "ru", "portuguese": "pt", "dutch": "nl", "italian": "it",
+    "chinese": "zh", "korean": "ko", "vietnamese": "vi", "polish": "pl", "turkish": "tr",
+    "ukrainian": "uk", "thai": "th", "arabic": "ar", "swedish": "sv", "czech": "cs",
+    "hungarian": "hu", "finnish": "fi", "danish": "da", "norwegian": "no", "greek": "el",
+    "hebrew": "he", "hindi": "hi",
+    
+    # Альтернативні назви
+    "deutsch": "de", "français": "fr", "francais": "fr", "español": "es", "espanol": "es",
+    "português": "pt", "portugues": "pt", "italiano": "it", "русский": "ru", "russkiy": "ru",
+    "nederlands": "nl", "svenska": "sv", "norsk": "no", "suomi": "fi", "magyar": "hu",
+    "čeština": "cs", "cestina": "cs", "polski": "pl", "türkçe": "tr", "turkce": "tr",
+    
+    # Скорочені варіанти  
+    "eng": "en", "ger": "de", "jap": "ja", "jpn": "ja", "fre": "fr", "spa": "es",
+    "por": "pt", "ita": "it", "rus": "ru", "chi": "zh", "kor": "ko", "vie": "vi",
+    "pol": "pl", "tur": "tr", "ukr": "uk", "ara": "ar", "swe": "sv", "cze": "cs",
+    "hun": "hu", "fin": "fi", "dan": "da", "nor": "no"
+}
+
 
 def clean_phone_for_validation(phone: str) -> str:
     """
@@ -88,6 +111,39 @@ def clean_it_prefix(text_value: str) -> str:
     return text_value
 
 
+def clean_app_platforms(app_platforms_value) -> str:
+    """
+    Конвертує app_platforms з array в відсортований string через кому
+    
+    Args:
+        app_platforms_value: Array або string платформ від Gemini API
+        
+    Returns:
+        Відсортований string через кому або порожній рядок
+    """
+    if not app_platforms_value:
+        return ""
+    
+    if isinstance(app_platforms_value, list):
+        # Фільтруємо порожні значення та дублікати
+        valid_platforms = [platform.strip().lower() for platform in app_platforms_value if platform and platform.strip()]
+        unique_platforms = list(dict.fromkeys(valid_platforms))  # Видаляємо дублікати зберігаючи порядок
+        
+        # Сортуємо по алфавіту
+        sorted_platforms = sorted(unique_platforms)
+        
+        return ", ".join(sorted_platforms)
+    
+    elif isinstance(app_platforms_value, str):
+        # Якщо прийшов string - обробляємо як раніше
+        platforms = [p.strip().lower() for p in app_platforms_value.split(",") if p.strip()]
+        unique_platforms = list(dict.fromkeys(platforms))
+        sorted_platforms = sorted(unique_platforms)
+        return ", ".join(sorted_platforms)
+    
+    return ""
+
+
 def has_access_issues(field_value: str, field_name: str = "") -> bool:
     """
     Перевіряє чи містить поле проблеми доступу або некоректні значення
@@ -114,11 +170,6 @@ def has_access_issues(field_value: str, field_name: str = "") -> bool:
         special_values = {"mixed", "unknown"}
         if field_lower in special_values or (len(field_value.strip()) == 2 and field_value.strip().isalpha()):
             return False
-    
-    # Спеціальна обробка для ISO кодів
-    iso_code_fields = ["primary_language", "geo_country"]
-    if field_name in iso_code_fields and len(field_value.strip()) < 2:
-        return True
     
     # Список проблемних значень
     access_issues = [
@@ -182,6 +233,55 @@ def validate_country_code(country_code: str) -> bool:
     if not country_code or len(country_code.strip()) != 2:
         return False
     return country_code.strip().isalpha()
+
+
+def validate_and_clean_language_code(language_value: str) -> str:
+    """
+    Розумна валідація та очистка коду мови
+    
+    Args:
+        language_value: Значення мови від Gemini API
+        
+    Returns:
+        Валідний ISO 639-1 код або порожній рядок
+    """
+    if not language_value:
+        return ""
+    
+    # Очищаємо та нормалізуємо
+    cleaned = language_value.strip().lower()
+    if not cleaned:
+        return ""
+    
+    # 1. ✅ ЯКЩО ВЖЕ 2 БУКВИ - ПРОПУСКАЄМО БЕЗ ВАЛІДАЦІЇ
+    if len(cleaned) == 2 and cleaned.isalpha():
+        return cleaned  # xy, zz, qq - все пропускаємо!
+    
+    # 2. Обробка locale кодів з дефісом (zh-tw, en-us, fr-ca)
+    if "-" in cleaned and len(cleaned) <= 6:
+        language_part = cleaned.split("-")[0]
+        if len(language_part) == 2 and language_part.isalpha():
+            return language_part  # Будь-який 2-буквенний код
+    
+    # 3. Обробка underscore кодів (en_US, zh_CN)
+    if "_" in cleaned and len(cleaned) <= 6:
+        language_part = cleaned.split("_")[0]
+        if len(language_part) == 2 and language_part.isalpha():
+            return language_part  # Будь-який 2-буквенний код
+    
+    # 4. Пошук у словнику популярних назв
+    if cleaned in LANGUAGE_NAME_TO_CODE:
+        return LANGUAGE_NAME_TO_CODE[cleaned]
+    
+    # 5. Часткове співпадіння для популярних мов (english -> en)
+    for lang_name, lang_code in LANGUAGE_NAME_TO_CODE.items():
+        if lang_name in cleaned or cleaned in lang_name:
+            # Додаткова перевірка щоб уникнути false positives
+            if len(lang_name) >= 4 and len(cleaned) >= 4:
+                return lang_code
+    
+    # 6. Якщо нічого не підійшло - порожній рядок
+    return ""
 
 
 def validate_email(email: str) -> bool:
@@ -356,20 +456,55 @@ def validate_segments_full(segment_combined: str, segments_full: str) -> bool:
 
 def clean_segments_language(language_value: str) -> str:
     """
-    Очищає segments_language від подвійних значень
+    Очищає segments_language - вибирає ПЕРШЕ валідне значення
     
     Args:
-        language_value: Значення мови (може бути "en en")
+        language_value: Значення мови (може бути "en en" або "en fr")
         
     Returns:
-        Очищене значення ("en")
+        Одне валідне значення або порожній рядок
     """
     if not language_value:
-        return language_value
+        return ""
     
-    # Розділяємо на слова, прибираємо дублікати, з'єднуємо
-    unique_parts = list(dict.fromkeys(language_value.split()))
-    return ' '.join(unique_parts) if len(unique_parts) > 1 else unique_parts[0] if unique_parts else ""
+    # Розділяємо на частини
+    parts = language_value.strip().split()
+    if not parts:
+        return ""
+    
+    # Пріоритети для вибору
+    special_values = {"mixed", "unknown"}
+    
+    # Спочатку шукаємо спеціальні значення
+    for part in parts:
+        part_lower = part.lower()
+        if part_lower in special_values:
+            return part_lower
+    
+    # Потім шукаємо валідні ISO коди (2 літери)
+    for part in parts:
+        part_clean = part.strip().lower()
+        if len(part_clean) == 2 and part_clean.isalpha():
+            return part_clean
+    
+    # Якщо нічого не знайдено, повертаємо перший елемент
+    return parts[0].lower()
+
+
+def clean_segmentation_field(field_value: str, field_name: str) -> str:
+    """
+    Очищає поле сегментації від проблемних значень
+    
+    Args:
+        field_value: Значення поля
+        field_name: Назва поля
+        
+    Returns:
+        Очищене значення або порожній рядок
+    """
+    if not field_value or has_access_issues(field_value, field_name):
+        return ""
+    return field_value.strip()
 
 
 def clean_all_segmentation_fields(segment_combined: str, gemini_result: dict) -> dict:
@@ -407,20 +542,31 @@ def clean_all_segmentation_fields(segment_combined: str, gemini_result: dict) ->
     return gemini_result
 
 
-def clean_segmentation_field(field_value: str, field_name: str) -> str:
+def clean_geo_fields(gemini_result: dict) -> dict:
     """
-    Очищає поле сегментації від проблемних значень
+    Очищає географічні поля з валідацією country code
+    Якщо geo_country невалідний - очищає всі geo поля
     
     Args:
-        field_value: Значення поля
-        field_name: Назва поля
+        gemini_result: Результати від Gemini
         
     Returns:
-        Очищене значення або порожній рядок
+        Очищений словник з валідними geo полями
     """
-    if not field_value or has_access_issues(field_value, field_name):
-        return ""
-    return field_value.strip()
+    geo_country = gemini_result.get("geo_country", "").strip()
+    
+    # Валідуємо geo_country
+    if geo_country and validate_country_code(geo_country):
+        # Country валідний - залишаємо всі geo поля
+        gemini_result["geo_country"] = geo_country.upper()  # ISO коди зазвичай uppercase
+        # geo_region і geo_city залишаються як є
+    else:
+        # Country невалідний - очищаємо ВСІ geo поля
+        gemini_result["geo_country"] = ""
+        gemini_result["geo_region"] = ""
+        gemini_result["geo_city"] = ""
+    
+    return gemini_result
 
 
 def clean_gemini_results(gemini_result: dict, segment_combined: str = "") -> dict:
@@ -472,11 +618,19 @@ def clean_gemini_results(gemini_result: dict, segment_combined: str = "") -> dic
                         pass
             
             cleaned_result[key] = validated_phones
+            
+        elif key == "app_platforms":
+            # 🆕 НОВА ОБРОБКА: array → sorted string
+            cleaned_result[key] = clean_app_platforms(value)
+            
         elif isinstance(value, str):
             if key == "segments_language":
-                # Спеціальна очистка для segments_language
+                # Спеціальна очистка для segments_language з правильними пріоритетами
                 cleaned_lang = clean_segments_language(value)
                 cleaned_result[key] = cleaned_lang
+            elif key == "primary_language":
+                # 🆕 РОЗУМНА ВАЛІДАЦІЯ для primary_language
+                cleaned_result[key] = validate_and_clean_language_code(value)
             elif key in segmentation_fields:
                 # Спеціальна обробка для полів сегментації
                 cleaned_result[key] = clean_segmentation_field(value, key)
@@ -496,6 +650,9 @@ def clean_gemini_results(gemini_result: dict, segment_combined: str = "") -> dic
     # Застосовуємо очистку сегментаційних полів
     if segment_combined:
         cleaned_result = clean_all_segmentation_fields(segment_combined, cleaned_result)
+    
+    # 🌍 НОВА ОБРОБКА: валідація географічних полів
+    cleaned_result = clean_geo_fields(cleaned_result)
     
     return cleaned_result
 
@@ -541,32 +698,72 @@ if __name__ == "__main__":
         "de de de",
         "mixed",
         "en fr", 
-        "unknown"
+        "unknown",
+        "mixed unknown",
+        "garbage en",
+        "123 mixed de"
     ]
     for lang in test_languages:
         result = clean_segments_language(lang)
         print(f"   '{lang}' → '{result}'")
     
-    # Тест 4: Очистка всіх сегментаційних полів
-    print("\n4. Segmentation Fields Cleaning:")
-    test_data = {
-        "segments_full": "w 3 web",
-        "segments_primary": "w web", 
-        "segments_thematic": "w web tech"
-    }
-    segment_combined = "w 3"
+    # Тест 4: Очистка app_platforms
+    print("\n4. App Platforms Cleaning:")
+    test_platforms = [
+        ["windows", "android", "chrome", "android"],  # Array з дублікатами
+        ["ios", "safari"],                             # Array без дублікатів
+        [],                                            # Порожній array
+        "windows, chrome, android",                    # String (старий формат)
+        "",                                            # Порожній string
+        None                                           # None
+    ]
+    for platforms in test_platforms:
+        result = clean_app_platforms(platforms)
+        print(f"   {platforms} → '{result}'")
     
-    print(f"   Original: {test_data}")
-    cleaned = clean_all_segmentation_fields(segment_combined, test_data.copy())
-    print(f"   Cleaned:  {cleaned}")
+    # Тест 5: Географічна валідація
+    print("\n5. Geo Fields Validation:")
+    test_geo_cases = [
+        {"geo_country": "US", "geo_region": "CA", "geo_city": "San Francisco"},      # Валідний
+        {"geo_country": "GB", "geo_region": "London", "geo_city": "London"},        # Валідний
+        {"geo_country": "USA", "geo_region": "CA", "geo_city": "San Francisco"},    # Невалідний country
+        {"geo_country": "123", "geo_region": "CA", "geo_city": "San Francisco"},    # Невалідний country
+        {"geo_country": "", "geo_region": "CA", "geo_city": "San Francisco"},       # Порожній country
+        {"geo_country": "X", "geo_region": "CA", "geo_city": "San Francisco"},      # Короткий country
+    ]
     
-    # Тест 5: Повний clean_gemini_results
-    print("\n5. Full Gemini Results Cleaning:")
+    for geo_data in test_geo_cases:
+        original = geo_data.copy()
+        cleaned = clean_geo_fields(geo_data)
+        print(f"   {original} → {cleaned}")
+    
+    # Тест 6: Валідація мов
+    print("\n6. Language Code Validation:")
+    test_languages = [
+        "en", "DE", "fr", "xy", "zz",       # Двобуквенні коди (ВСІ пропускаються!)
+        "zh-tw", "en-us", "fr-ca",          # Locale з дефісом → перші 2 букви
+        "en_US", "zh_CN",                   # Locale з underscore → перші 2 букви
+        "english", "german", "japanese",    # Повні назви → конвертація
+        "français", "español", "português", # Альтернативні назви → конвертація
+        "eng", "ger", "jap",                # Скорочені → конвертація
+        "123", "toolong", "x", "",          # Невалідні → порожньо
+        "unclear", "not detected"           # Access issues → порожньо
+    ]
+    for lang in test_languages:
+        result = validate_and_clean_language_code(lang)
+        print(f"   '{lang}' → '{result}'")
+    
+    # Тест 7: Повний clean_gemini_results з мовами
+    # Тест 7: Повний clean_gemini_results з геогафією та мовами
+    print("\n7. Full Gemini Results with Geo and Language Validation:")
     test_gemini_result = {
         "segments_full": "w 3 web",
         "segments_language": "en en",
-        "segments_thematic": "w web tech",
-        "summary": "test platform"
+        "app_platforms": ["windows", "chrome"],
+        "primary_language": "english",  # Повна назва → en
+        "geo_country": "USA",  # Невалідний!
+        "geo_region": "California",
+        "geo_city": "San Francisco"
     }
     
     print(f"   Before: {test_gemini_result}")
@@ -574,5 +771,5 @@ if __name__ == "__main__":
     print(f"   After:  {cleaned_full}")
     
     print(f"\n=== Test completed ===")
-    print(f"Module loaded successfully with new cleaning logic")
-    print("Key changes: segments cleaning, language deduplication, unified validation")
+    print(f"Module loaded successfully with PROPER language validation")
+    print("Key changes: ANY 2-letter code passes, non-2-letter codes get converted or emptied")

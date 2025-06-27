@@ -446,7 +446,8 @@ async def save_gemini_results(mongo_client: AsyncIOMotorClient, domain_full: str
     gemini_collection_name = MONGO_CONFIG["databases"]["main_db"]["collections"]["gemini"]
     gemini_collection = mongo_client[db_name][gemini_collection_name]
     
-    cleaned_result = clean_gemini_results(gemini_result)
+    # 🔧 ВИПРАВЛЕННЯ: Передаємо segment_combined в clean_gemini_results
+    cleaned_result = clean_gemini_results(gemini_result, segment_combined)
     
     summary = cleaned_result.get("summary", "").strip()
     similarity_search_phrases = cleaned_result.get("similarity_search_phrases", "").strip()
@@ -565,13 +566,8 @@ async def save_gemini_results(mongo_client: AsyncIOMotorClient, domain_full: str
                 segmentation_update["segments_thematic"] = segments_thematic
             if segments_common:
                 segmentation_update["segments_common"] = segments_common
-            
-            if segmentation_logger:
-                segmentation_logger.info(f"Domain segmentation validation passed for domain: {domain_full}")
-            else:
-                logger.info(f"Domain segmentation validation passed for domain: {domain_full}")
         else:
-            # Валідація не пройшла
+            # Валідація не пройшла - логуємо ТІЛЬКИ warning
             if segmentation_logger:
                 segmentation_logger.warning(f"Domain segmentation validation failed for domain: {domain_full}")
             else:
@@ -581,12 +577,8 @@ async def save_gemini_results(mongo_client: AsyncIOMotorClient, domain_full: str
         segments_language = cleaned_result.get("segments_language", "")
         if segments_language and validate_segments_language(segments_language):
             segmentation_update["segments_language"] = segments_language
-            
-            if segmentation_logger:
-                segmentation_logger.info(f"Valid segments_language '{segments_language}' for domain: {domain_full}")
-            else:
-                logger.info(f"Valid segments_language '{segments_language}' for domain: {domain_full}")
         elif segments_language:
+            # Логуємо ТІЛЬКИ warning для невалідної мови
             if segmentation_logger:
                 segmentation_logger.warning(f"Invalid segments_language '{segments_language}' for domain: {domain_full} - not saved")
             else:
@@ -656,7 +648,7 @@ if __name__ == "__main__":
         "set_domain_error_status",
         "get_domain_segmentation_info",
         "save_contact_information", 
-        "save_gemini_results (with new segmentation fields)",
+        "save_gemini_results (FIXED: now passes segment_combined)",
         "update_api_key_ip"
     ]
     
@@ -668,6 +660,7 @@ if __name__ == "__main__":
     print("   ✓ needs_ip_refresh")
     
     print("\n🏁 Module ready for integration with main.py")
-    print("💡 Usage example:")
-    print("   await save_gemini_results(client, domain, uri, result, status, id, segment,")
-    print("                              revert_logger=revert_log, segmentation_logger=seg_log)")
+    print("💡 Critical fix:")
+    print("   - save_gemini_results now correctly passes segment_combined to clean_gemini_results")
+    print("   - Segmentation field cleaning will now work properly")
+    print("   - No more 'web' in segments_thematic for 'w 3' domains!")

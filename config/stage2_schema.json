@@ -231,8 +231,23 @@
       "description": "API documentation page URL in canonical format (RFC 3986) - provide only if API documentation section detected."
     },
     "app_platforms": {
-      "type": "string",
-      "description": "Software platforms developed by website. Examples: 'windows, macos, linux, ios, android, chrome, firefox, edge, safari, electron', etc. Use comma for multiple platforms."
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "android",
+          "ios",
+          "windows",
+          "macos",
+          "linux",
+          "chrome",
+          "firefox",
+          "edge",
+          "safari",
+          "opera"
+        ]
+      },
+      "description": "Software platforms developed by website"
     },
     "geo_country": {
       "type": "string",

@@ -3,3 +3,4 @@ aiohttp_socks==0.10.1
 motor==3.7.0
 pymongo==4.12.1
 certifi==2025.1.31
+phonenumbers==9.0.4
