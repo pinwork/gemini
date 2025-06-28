@@ -114,35 +114,42 @@ def clean_it_prefix(text_value: str) -> str:
 
 def clean_app_platforms(app_platforms_value) -> str:
     """
-    Конвертує app_platforms з array в відсортований string через кому
+    Парсить та валідує app_platforms string з обмеженим списком платформ
     
     Args:
-        app_platforms_value: Array або string платформ від Gemini API
+        app_platforms_value: String з платформами від Gemini (або array для зворотної сумісності)
         
     Returns:
-        Відсортований string через кому або порожній рядок
+        Валідний string з унікальними платформами через кому
     """
     if not app_platforms_value:
         return ""
     
+    # Дозволені платформи
+    VALID_PLATFORMS = {
+        "android", "ios", "windows", "macos", "linux", 
+        "chrome", "firefox", "edge", "safari", "opera"
+    }
+    
+    # Обробляємо як array (зворотна сумісність) або string
     if isinstance(app_platforms_value, list):
-        # Фільтруємо порожні значення та дублікати
-        valid_platforms = [platform.strip().lower() for platform in app_platforms_value if platform and platform.strip()]
-        unique_platforms = list(dict.fromkeys(valid_platforms))  # Видаляємо дублікати зберігаючи порядок
-        
-        # Сортуємо по алфавіту
-        sorted_platforms = sorted(unique_platforms)
-        
-        return ", ".join(sorted_platforms)
+        # Array - перетворюємо в string
+        platforms_text = ", ".join(str(item) for item in app_platforms_value if item)
+    else:
+        # String - використовуємо як є
+        platforms_text = str(app_platforms_value)
     
-    elif isinstance(app_platforms_value, str):
-        # Якщо прийшов string - обробляємо як раніше
-        platforms = [p.strip().lower() for p in app_platforms_value.split(",") if p.strip()]
-        unique_platforms = list(dict.fromkeys(platforms))
-        sorted_platforms = sorted(unique_platforms)
-        return ", ".join(sorted_platforms)
+    # Парсимо string - розділяємо по комах та пробілах  
+    platforms = []
+    for item in platforms_text.replace(",", " ").split():
+        platform = item.strip().lower()
+        if platform in VALID_PLATFORMS:
+            platforms.append(platform)
     
-    return ""
+    # Дедуплікація зберігаючи порядок + сортування
+    unique_platforms = list(dict.fromkeys(platforms))
+    
+    return ", ".join(sorted(unique_platforms))
 
 
 def has_access_issues(field_value: str, field_name: str = "") -> bool:
@@ -697,7 +704,7 @@ def clean_gemini_results(gemini_result: dict, segment_combined: str = "", domain
             cleaned_result[key] = validated_phones
             
         elif key == "app_platforms":
-            # 🆕 НОВА ОБРОБКА: array → sorted string
+            # 🆕 НОВА ОБРОБКА: string з валідацією
             cleaned_result[key] = clean_app_platforms(value)
             
         elif isinstance(value, str):
@@ -806,15 +813,18 @@ if __name__ == "__main__":
         result = clean_segments_language(lang)
         print(f"   '{lang}' → '{result}'")
     
-    # Тест 5: Очистка app_platforms
-    print("\n5. App Platforms Cleaning:")
+    # Тест 5: НОВА очистка app_platforms (string)
+    print("\n5. NEW: App Platforms String Cleaning:")
     test_platforms = [
-        ["windows", "android", "chrome", "android"],  # Array з дублікатами
-        ["ios", "safari"],                             # Array без дублікатів
-        [],                                            # Порожній array
-        "windows, chrome, android",                    # String (старий формат)
-        "",                                            # Порожній string
-        None                                           # None
+        "windows, android, chrome, android",              # String з дублікатами
+        "ios, safari, badplatform, chrome",               # String з невалідною платформою
+        "WINDOWS CHROME android",                          # String з пробілами та різним регістром
+        "ios,safari,chrome,firefox,edge,safari",          # String без пробілів з дублікатами
+        "",                                                # Порожній string
+        ["windows", "android", "chrome", "android"],      # Array (зворотна сумісність)
+        ["ios", "safari", "badplatform"],                 # Array з невалідною платформою
+        [],                                                # Порожній array
+        None                                               # None
     ]
     for platforms in test_platforms:
         result = clean_app_platforms(platforms)
@@ -854,6 +864,6 @@ if __name__ == "__main__":
     
     print(f"\n=== Test completed ===")
     print(f"🆕 NEW FUNCTION: validate_segments_full_only() for retry logic")
-    print(f"🆕 This function is used in main.py retry loop to validate segments_full")
-    print(f"🆕 Does NOT save to database - only validates for retry decision")
-    print(f"Module loaded successfully with RETRY-READY validation")
+    print(f"🆕 UPDATED FUNCTION: clean_app_platforms() now handles string input with validation")
+    print(f"🆕 This function validates against specific platform list and removes duplicates")
+    print(f"Module loaded successfully with ENHANCED validation and retry support")

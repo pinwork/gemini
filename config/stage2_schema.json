@@ -15,7 +15,7 @@
     },
     "segments_full": {
       "type": "string",
-      "description": "Complete domain segmentation with words separated by spaces. Must reconstruct original domain when joined."
+      "description": "Complete domain segmentation with words separated by spaces. Must reconstruct original domain when joined. Do not expand abbreviations or add synonyms. Use only letters present in original domain core. Example: 'iastate' can split to 'ia state' but NOT 'iowa state'."
     },
     "segments_primary": {
       "type": "string",
@@ -231,23 +231,8 @@
       "description": "API documentation page URL in canonical format (RFC 3986) - provide only if API documentation section detected."
     },
     "app_platforms": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "enum": [
-          "android",
-          "ios",
-          "windows",
-          "macos",
-          "linux",
-          "chrome",
-          "firefox",
-          "edge",
-          "safari",
-          "opera"
-        ]
-      },
-      "description": "Software platforms developed by website"
+      "type": "string",
+      "description": "Software platforms developed by website. Comma-separated list using only: android, ios, windows, macos, linux, chrome, firefox, edge, safari, opera"
     },
     "geo_country": {
       "type": "string",

@@ -705,17 +705,15 @@ async def save_gemini_results(mongo_client: AsyncIOMotorClient, domain_full: str
                     if segments_common:
                         segmentation_update["segments_common"] = segments_common
                 else:
-                    # ❌ Валідація НЕ пройшла - логуємо ОРИГІНАЛЬНИЙ результат + очищений
+                    # ❌ Валідація НЕ пройшла - логуємо ТІЛЬКИ в файл
                     if segmentation_logger:
                         segmentation_logger.warning(f"Domain {domain_full}: segments_full validation failed | AI returned: '{original_segments_full}' | After cleaning: '{segments_full}'")
-                    else:
-                        logger.warning(f"Domain {domain_full}: segments_full validation failed | AI returned: '{original_segments_full}' | After cleaning: '{segments_full}'")
+                    # Прибираємо logger.warning - досить логів у stage2_retries.log
         else:
-            # Очищений segments_full порожній - логуємо
+            # Очищений segments_full порожній - логуємо ТІЛЬКИ в файл
             if segmentation_logger:
                 segmentation_logger.warning(f"Domain {domain_full}: segments_full validation failed | AI returned: '{original_segments_full}' | After cleaning: <empty>")
-            else:
-                logger.warning(f"Domain {domain_full}: segments_full validation failed | AI returned: '{original_segments_full}' | After cleaning: <empty>")
+            # Прибираємо logger.warning - досить логів у stage2_retries.log
         
         # Валідація segments_language окремо
         segments_language = cleaned_result.get("segments_language", "")
@@ -881,9 +879,3 @@ if __name__ == "__main__":
     
     for func in functions:
         print(f"   ✓ {func}")
-    
-    print("\n🆕 NEW FALLBACK FUNCTION:")
-    print("   📝 save_gemini_results_with_validation_failed()")
-    print("   🎯 Used when all Stage2 retry attempts fail (max 5)")
-    print("   💾 Forces segments_full = 'validation_failed' and saves to DB")
-    print("   📊 Logs retry count and reason for fallback usage")
