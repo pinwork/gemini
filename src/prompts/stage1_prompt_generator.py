@@ -3,7 +3,6 @@
 
 import random
 
-# Словник варіацій слів для stage1 промпта
 stage1_word_variations = {
     "analyzer": ["analyzer", "evaluator", "specialist", "expert", "reviewer"],
     "intelligence": ["intelligence", "insights", "information"],
@@ -24,7 +23,6 @@ stage1_word_variations = {
     "only": ["only", "exclusively"]
 }
 
-# Базове введення для stage1 промпта
 stage1_base_intro = [
     "You are a website content {analyzer} {optimized} for {extracting} structured {business} {intelligence}.",
     "{Analyze} {website} {content} and {provide} {comprehensive} {business} characteristics.",
@@ -36,7 +34,6 @@ stage1_base_intro = [
     "IMPORTANT: Provide responses for ALL fields and indicators below. If not found, write 'Not detected'. If found, describe in one sentence what exactly was detected."
 ]
 
-# Всі детектори для stage1
 stage1_all_detectors = {
     "b2c_detected": "True only if core offering targets individual consumers (B2C)",
     "b2b_detected": "True only if core offering targets businesses (B2B)",
@@ -61,7 +58,6 @@ stage1_all_detectors = {
     "mobile_first_detected": "True only if layout is clearly built mobile-first"
 }
 
-# Текстові поля для stage1
 stage1_text_fields = {
     "website_summary": "Generate a comprehensive 5-7 sentence summary showcasing the website's core functionality, business purpose, and value proposition. Transform any brand names or site identifiers into neutral terms (platform, service, website, tool, system). Lead with descriptive business category or key differentiator using format: [Category/Adjective] + [Core Function] + [Target/Scope]. Examples: 'Payment aggregator providing...', 'French news publication covering...', 'High-performance tensor library for...'. Deliver immediate value by highlighting business model, target audience, main features/services, geographic scope, and revenue approach when identifiable. Craft each sentence to carry meaningful semantic weight for effective similarity matching and vectorization.",
     "similarity_search_phrases": "Build 3-4 keyword phrases for finding similar websites. Focus on core business function + industry/technology. Use specific terms, avoid brand names and generic words. Example: project management software, team collaboration, task tracking platform, agile workflow tools, etc. Use comma to separate multiple phrases.",
@@ -90,15 +86,6 @@ stage1_text_fields = {
 
 
 def apply_stage1_word_variations(text: str) -> str:
-    """
-    Застосовує варіації слів до тексту stage1 промпта
-    
-    Args:
-        text: Текст для обробки
-        
-    Returns:
-        Оброблений текст з застосованими варіаціями
-    """
     for word, variations in stage1_word_variations.items():
         if word in text:
             text = text.replace(f"{{{word}}}", random.choice(variations))
@@ -106,40 +93,27 @@ def apply_stage1_word_variations(text: str) -> str:
 
 
 def generate_stage1_prompt() -> str:
-    """
-    Генерує промпт для першого етапу аналізу веб-сайту
-    
-    Returns:
-        Згенерований промпт для stage1
-    """
-    # Застосовуємо варіації до введення
     intro_text = " ".join(stage1_base_intro)
     intro_with_variations = apply_stage1_word_variations(intro_text)
     
-    # Перемішуємо детектори для варіативності
     detector_items = list(stage1_all_detectors.items())
     random.shuffle(detector_items)
     
-    # Перемішуємо текстові поля для варіативності
     text_items = list(stage1_text_fields.items())
     random.shuffle(text_items)
     
-    # Будуємо секції аналізу
     analysis_sections = []
     
-    # Додаємо секцію загального аналізу
     analysis_sections.append("\n=== GENERAL ANALYSIS ===")
     for field_name, description in text_items:
         analysis_sections.append(f"**{field_name.upper().replace('_', ' ')}**: {description}")
     
-    # Додаємо секцію виявлення функцій
     analysis_sections.append("\n=== FEATURE DETECTION ===") 
     
     for detector_name, description in detector_items:
         clean_name = detector_name.replace('_detected', '').replace('_', ' ').title()
         analysis_sections.append(f"**{clean_name}**: {description}")
     
-    # Фінальні інструкції
     final_instructions = [
         "\n=== OUTPUT FORMAT ===",
         "Structure your response clearly with headers for each section OR return the short exception message mentioned above for access/functionality issues.",
@@ -150,7 +124,6 @@ def generate_stage1_prompt() -> str:
         "If summary is the most detailed description and similarity_search_phrases break down all summary details into compact form ideal for vector search, then vector_search_phrase is perfectly distilled essence from summary."
     ]
     
-    # Складаємо фінальний промпт
     full_prompt = "\n".join([
         intro_with_variations,
         *analysis_sections,
@@ -161,7 +134,6 @@ def generate_stage1_prompt() -> str:
 
 
 if __name__ == "__main__":
-    # Тестування модуля
     prompt = generate_stage1_prompt()
     print("Generated Stage1 Prompt:")
     print("=" * 50)

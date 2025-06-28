@@ -21,17 +21,14 @@ try:
     from .proxy_config import ProxyConfig
     from .network_error_classifier import classify_exception
 except ImportError:
-    # Fallback для прямого запуску
     import sys
     from pathlib import Path
     sys.path.append(str(Path(__file__).parent))
     from proxy_config import ProxyConfig
     from network_error_classifier import classify_exception
 
-# SSL контекст
 SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
-# Таймінги та обмеження (тепер без START_DELAY_MS!)
 MAX_CONCURRENT_STARTS = 1
 CONNECT_TIMEOUT = 6
 SOCK_CONNECT_TIMEOUT = 6
@@ -39,12 +36,10 @@ SOCK_READ_TIMEOUT = 240
 TOTAL_TIMEOUT = 250
 STAGE2_TIMEOUT_SECONDS = 90
 
-# Моделі за замовчуванням
 DEFAULT_STAGE1_MODEL = "gemini-2.5-flash"
 DEFAULT_STAGE2_MODEL = "gemini-2.0-flash"
-DEFAULT_START_DELAY_MS = 700  # 🆕 За замовчуванням якщо не передано
+DEFAULT_START_DELAY_MS = 700
 
-# Глобальний стан для контролю таймінгу
 _stage_timing = {
     "stage1": {"last_request_time": 0, "semaphore": None},
     "stage2": {"last_request_time": 0, "semaphore": None}
@@ -52,7 +47,6 @@ _stage_timing = {
 
 
 class GeminiAPIError(Exception):
-    """Виняток для помилок Gemini API"""
     def __init__(self, message: str, status_code: Optional[int] = None, response_data: Optional[dict] = None):
         super().__init__(message)
         self.status_code = status_code
@@ -60,49 +54,23 @@ class GeminiAPIError(Exception):
 
 
 class GeminiClient:
-    """
-    Клієнт для роботи з Gemini API
-    
-    Підтримує двоетапний аналіз веб-сайтів:
-    - Stage1: Отримання контенту сайту через urlContext
-    - Stage2: Структурований бізнес-аналіз по JSON схемі
-    """
     
     def __init__(self, 
                  stage1_model: str = DEFAULT_STAGE1_MODEL,
                  stage2_model: str = DEFAULT_STAGE2_MODEL,
                  stage2_schema: Optional[dict] = None,
-                 start_delay_ms: int = DEFAULT_START_DELAY_MS):  # 🆕 НОВИЙ ПАРАМЕТР
-        """
-        Ініціалізує Gemini клієнт
-        
-        Args:
-            stage1_model: Модель для Stage1 аналізу
-            stage2_model: Модель для Stage2 аналізу  
-            stage2_schema: JSON схема для Stage2 відповідей
-            start_delay_ms: Пауза між запитами в мілісекундах
-        """
+                 start_delay_ms: int = DEFAULT_START_DELAY_MS):
         self.stage1_model = stage1_model
         self.stage2_model = stage2_model
         self.stage2_schema = stage2_schema or {}
-        self.start_delay_ms = start_delay_ms  # 🆕 ЗБЕРІГАЄМО В INSTANCE
+        self.start_delay_ms = start_delay_ms
         
-        # Ініціалізуємо семафори для контролю конкурентності
         if _stage_timing["stage1"]["semaphore"] is None:
             _stage_timing["stage1"]["semaphore"] = asyncio.Semaphore(MAX_CONCURRENT_STARTS)
         if _stage_timing["stage2"]["semaphore"] is None:
             _stage_timing["stage2"]["semaphore"] = asyncio.Semaphore(MAX_CONCURRENT_STARTS)
     
     def format_api_error(self, raw_response: str) -> str:
-        """
-        Форматує помилку API для читабельного виводу
-        
-        Args:
-            raw_response: Сирий відповідь від API
-            
-        Returns:
-            Форматований опис помилки
-        """
         try:
             error_data = json.loads(raw_response)
             if "error" in error_data:
@@ -117,12 +85,6 @@ class GeminiClient:
         return raw_response[:200] + "..." if len(raw_response) > 200 else raw_response
     
     async def _enforce_request_interval(self, stage_name: str) -> None:
-        """
-        Забезпечує мінімальний інтервал між запитами для уникнення rate limits
-        
-        Args:
-            stage_name: Назва етапу ("stage1" або "stage2")
-        """
         stage_key = stage_name.lower()
         
         if stage_key not in _stage_timing:
@@ -133,7 +95,6 @@ class GeminiClient:
             last_time = _stage_timing[stage_key]["last_request_time"]
             time_since_last = current_time - last_time
             
-            # 🆕 ВИКОРИСТОВУЄМО self.start_delay_ms ЗАМІСТЬ КОНСТАНТИ
             min_interval = self.start_delay_ms / 1000.0
             sleep_time = max(0, min_interval - time_since_last)
             
@@ -148,30 +109,11 @@ class GeminiClient:
                            payload: dict,
                            stage_name: str,
                            timeout_seconds: Optional[int] = None) -> Tuple[aiohttp.ClientResponse, dict]:
-        """
-        Виконує HTTP запит до Gemini API з контролем таймінгу
-        
-        Args:
-            proxy_config: Конфігурація проксі
-            url: URL для запиту
-            payload: Дані для відправки
-            stage_name: Назва етапу для контролю таймінгу
-            timeout_seconds: Кастомний timeout для запиту
-            
-        Returns:
-            Кортеж (response, response_data)
-            
-        Raises:
-            GeminiAPIError: При помилках API
-            Exception: При мережевих помилках
-        """
-        # Контролюємо інтервал між запитами
         await self._enforce_request_interval(stage_name)
         
-        # Налаштовуємо timeout
         if timeout_seconds:
             timeout = aiohttp.ClientTimeout(
-                total=timeout_seconds + 10,  # Додаємо буфер
+                total=timeout_seconds + 10,
                 connect=CONNECT_TIMEOUT,
                 sock_connect=SOCK_CONNECT_TIMEOUT,
                 sock_read=timeout_seconds
@@ -184,10 +126,8 @@ class GeminiClient:
                 sock_read=SOCK_READ_TIMEOUT
             )
         
-        # Налаштовуємо headers
         headers = {"Content-Type": "application/json"}
         
-        # Налаштовуємо проксі connector
         connector_params = proxy_config.get_connection_params()
         connector_params.update({
             'ssl': SSL_CONTEXT,
@@ -208,15 +148,6 @@ class GeminiClient:
                     return response, resp_text
     
     def _parse_stage1_response(self, response_data: dict) -> Tuple[str, str]:
-        """
-        Парсить відповідь Stage1 для отримання grounding status та тексту
-        
-        Args:
-            response_data: Відповідь від Gemini API
-            
-        Returns:
-            Кортеж (grounding_status, text_response)
-        """
         candidates = response_data.get("candidates", [])
         if not candidates:
             return "NO_CANDIDATES", ""
@@ -233,24 +164,11 @@ class GeminiClient:
         
         return grounding_status, text_response
     
-    def _build_stage1_payload(self, target_uri: str, stage1_prompt: str, use_google_search: bool = True) -> dict:
-        """
-        Будує payload для Stage1 запиту
+    def _build_stage1_payload(self, domain_full: str, stage1_prompt: str, use_google_search: bool = True) -> dict:
+        user_message = f"Analyze website https://{domain_full}\n\n{stage1_prompt}"
         
-        Args:
-            target_uri: URI цільового сайту
-            stage1_prompt: Промпт для аналізу
-            use_google_search: Чи використовувати Google Search разом з URL Context
-            
-        Returns:
-            Словник з payload для API
-        """
-        user_message = f"Analyze website {target_uri}\n\n{stage1_prompt}"
-        
-        # Базовий інструмент - завжди URL Context
         tools = [{"urlContext": {}}]
         
-        # Додаємо Google Search якщо потрібно
         if use_google_search:
             tools.append({"googleSearch": {}})
         
@@ -269,19 +187,8 @@ class GeminiClient:
             }
         }
     
-    def _build_stage2_payload(self, target_uri: str, text_content: str, system_prompt: str) -> dict:
-        """
-        Будує payload для Stage2 запиту
-        
-        Args:
-            target_uri: URI цільового сайту
-            text_content: Контент отриманий з Stage1
-            system_prompt: Системний промпт
-            
-        Returns:
-            Словник з payload для API
-        """
-        user_message = f"Analyze content review of website {target_uri}: {text_content}"
+    def _build_stage2_payload(self, domain_full: str, text_content: str, system_prompt: str) -> dict:
+        user_message = f"Analyze content review of website {domain_full}: {text_content}"
         
         payload = {
             "contents": [
@@ -303,41 +210,19 @@ class GeminiClient:
             }
         }
         
-        # Додаємо схему якщо вона є
         if self.stage2_schema:
             payload["generationConfig"]["responseSchema"] = self.stage2_schema
         
         return payload
     
     async def analyze_content(self, 
-                            target_uri: str, 
+                            domain_full: str, 
                             api_key: str, 
                             proxy_config: ProxyConfig,
                             stage1_prompt: str,
                             use_google_search: bool = True) -> dict:
-        """
-        Stage1: Аналізує веб-сайт та отримує його контент через urlContext та опціонально Google Search
-        
-        Args:
-            target_uri: URI цільового сайту
-            api_key: API ключ для Gemini
-            proxy_config: Конфігурація проксі
-            stage1_prompt: Промпт для аналізу
-            use_google_search: Чи використовувати Google Search разом з URL Context
-            
-        Returns:
-            Словник з результатами аналізу:
-            {
-                "success": bool,
-                "grounding_status": str,
-                "text_response": str,
-                "status_code": int,
-                "response_time": float,
-                "error": str (якщо є помилка)
-            }
-        """
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.stage1_model}:generateContent?key={api_key}"
-        payload = self._build_stage1_payload(target_uri, stage1_prompt, use_google_search)
+        payload = self._build_stage1_payload(domain_full, stage1_prompt, use_google_search)
         
         start_time = asyncio.get_event_loop().time()
         
@@ -408,33 +293,13 @@ class GeminiClient:
             }
     
     async def analyze_business(self, 
-                             target_uri: str, 
+                             domain_full: str, 
                              text_content: str, 
                              api_key: str, 
                              proxy_config: ProxyConfig,
                              system_prompt: str) -> dict:
-        """
-        Stage2: Структурований бізнес-аналіз контенту веб-сайту
-        
-        Args:
-            target_uri: URI цільового сайту
-            text_content: Контент отриманий з Stage1
-            api_key: API ключ для Gemini
-            proxy_config: Конфігурація проксі
-            system_prompt: Системний промпт для аналізу
-            
-        Returns:
-            Словник з результатами аналізу:
-            {
-                "success": bool,
-                "status_code": int,
-                "response_time": float,
-                "result": dict (структуровані дані якщо успішно),
-                "error": str (якщо є помилка)
-            }
-        """
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.stage2_model}:generateContent?key={api_key}"
-        payload = self._build_stage2_payload(target_uri, text_content, system_prompt)
+        payload = self._build_stage2_payload(domain_full, text_content, system_prompt)
         
         start_time = asyncio.get_event_loop().time()
 
@@ -534,22 +399,11 @@ class GeminiClient:
             }
     
     async def test_connection(self, api_key: str, proxy_config: ProxyConfig, use_google_search: bool = True) -> dict:
-        """
-        Тестує підключення до Gemini API
-        
-        Args:
-            api_key: API ключ для тестування
-            proxy_config: Конфігурація проксі
-            use_google_search: Чи використовувати Google Search
-            
-        Returns:
-            Словник з результатами тесту
-        """
         test_prompt = "Say 'Hello, Gemini API is working!' in exactly these words."
         
         try:
             result = await self.analyze_content(
-                "https://www.google.com", 
+                "google.com", 
                 api_key, 
                 proxy_config, 
                 test_prompt,
@@ -565,12 +419,6 @@ class GeminiClient:
             return {"success": False, "message": f"Connection test failed: {str(e)}"}
     
     def get_usage_stats(self) -> dict:
-        """
-        Повертає статистику використання клієнта
-        
-        Returns:
-            Словник зі статистикою
-        """
         return {
             "stage1_model": self.stage1_model,
             "stage2_model": self.stage2_model,
@@ -579,24 +427,13 @@ class GeminiClient:
             "stage1_features": ["urlContext", "googleSearch"],
             "stage2_features": ["JSON_schema", "systemInstruction"],
             "timing_intervals": {
-                "start_delay_ms": self.start_delay_ms,  # 🆕 ТЕПЕР ДИНАМІЧНИЙ
+                "start_delay_ms": self.start_delay_ms,
                 "max_concurrent": MAX_CONCURRENT_STARTS
             }
         }
 
 
-# 🆕 ОНОВЛЕНІ ФАБРИЧНІ ФУНКЦІЇ З start_delay_ms
 def create_gemini_client(stage2_schema: Optional[dict] = None, start_delay_ms: int = DEFAULT_START_DELAY_MS) -> GeminiClient:
-    """
-    Створює GeminiClient з налаштуваннями за замовчуванням
-    
-    Args:
-        stage2_schema: JSON схема для Stage2 (опціонально)
-        start_delay_ms: Пауза між запитами в мілісекундах
-        
-    Returns:
-        Налаштований GeminiClient
-    """
     return GeminiClient(
         stage1_model=DEFAULT_STAGE1_MODEL,
         stage2_model=DEFAULT_STAGE2_MODEL,
@@ -609,18 +446,6 @@ def create_custom_gemini_client(stage1_model: str,
                                stage2_model: str, 
                                stage2_schema: Optional[dict] = None,
                                start_delay_ms: int = DEFAULT_START_DELAY_MS) -> GeminiClient:
-    """
-    Створює GeminiClient з кастомними налаштуваннями
-    
-    Args:
-        stage1_model: Модель для Stage1
-        stage2_model: Модель для Stage2
-        stage2_schema: JSON схема для Stage2 (опціонально)
-        start_delay_ms: Пауза між запитами в мілісекундах
-        
-    Returns:
-        Налаштований GeminiClient
-    """
     return GeminiClient(
         stage1_model=stage1_model,
         stage2_model=stage2_model,
@@ -630,39 +455,32 @@ def create_custom_gemini_client(stage1_model: str,
 
 
 if __name__ == "__main__":
-    # Реальне тестування модуля з запитами до Gemini API
     import asyncio
     from pathlib import Path
     import json
     import sys
     
     async def test_with_mongo_credentials():
-        """Тест з автоматичним отриманням API ключа та проксі з MongoDB"""
         print("=== Gemini Client Auto Test (MongoDB credentials) ===\n")
         
         try:
-            # Імпортуємо mongo_operations
             from mongo_operations import get_api_key_and_proxy
             from motor.motor_asyncio import AsyncIOMotorClient
             
-            # Завантажуємо mongo config
             config_path = Path(__file__).parent.parent.parent / "config" / "mongo_config.json"
             with config_path.open("r", encoding="utf-8") as f:
                 mongo_config = json.load(f)
             
-            # Підключаємось до MongoDB
             api_db_uri = mongo_config["databases"]["main_db"]["uri"]
             client_params = mongo_config["client_params"]
             mongo_client = AsyncIOMotorClient(api_db_uri, **client_params)
             
             print("✓ Connected to MongoDB")
             
-            # Отримуємо API ключ та проксі
             api_key, proxy_config, key_record_id, key_rec = await get_api_key_and_proxy(mongo_client)
             print(f"✓ Got API key: {api_key[:8]}...{api_key[-4:]}")
             print(f"✓ Got proxy: {proxy_config.connection_string}")
             
-            # Закриваємо MongoDB підключення
             mongo_client.close()
             
             return api_key, proxy_config
@@ -673,7 +491,6 @@ if __name__ == "__main__":
             return None, None
     
     async def test_with_manual_credentials():
-        """Тест з ручними параметрами з командного рядка"""
         print("=== Gemini Client Manual Test (CLI parameters) ===\n")
         
         if len(sys.argv) < 4:
@@ -686,7 +503,6 @@ if __name__ == "__main__":
         proxy_address = sys.argv[3]
         proxy_auth = sys.argv[4] if len(sys.argv) > 4 else None
         
-        # Парсимо proxy адресу
         try:
             if ":" in proxy_address:
                 proxy_ip, proxy_port = proxy_address.split(":", 1)
@@ -698,13 +514,11 @@ if __name__ == "__main__":
             print("❌ Invalid proxy port. Must be integer")
             return None, None
         
-        # Парсимо auth якщо є
         proxy_username = None
         proxy_password = None
         if proxy_auth and ":" in proxy_auth:
             proxy_username, proxy_password = proxy_auth.split(":", 1)
         
-        # Створюємо proxy config
         try:
             proxy_config = ProxyConfig(
                 protocol=proxy_protocol,
@@ -720,9 +534,6 @@ if __name__ == "__main__":
             return None, None
     
     async def run_gemini_test(api_key, proxy_config):
-        """Виконує фактичні тести з Gemini API"""
-        
-        # Завантажуємо схему
         try:
             schema_path = Path(__file__).parent.parent.parent / "config" / "stage2_schema.json"
             with schema_path.open("r", encoding="utf-8") as f:
@@ -732,25 +543,21 @@ if __name__ == "__main__":
             print(f"⚠ Could not load schema: {e}")
             schema = {}
         
-        # 🆕 СТВОРЮЄМО КЛІЄНТ З КАСТОМНОЮ ПАУЗОЮ (500ms для тесту)
         client = create_gemini_client(schema, start_delay_ms=500)
         print(f"✓ GeminiClient created with {client.start_delay_ms}ms delay")
         
-        # Тестовий сайт і промпти
-        test_uri = "https://www.shopify.com"
+        test_domain = "shopify.com"
         stage1_prompt = "Analyze this website and provide detailed information about its content, purpose, and functionality."
         
-        print(f"\n🔍 Testing website: {test_uri}")
+        print(f"\n🔍 Testing domain: {test_domain}")
         print("=" * 60)
         
-        # === STAGE 1 TEST ===
         print("\n📖 STAGE 1 - Content Analysis:")
         print("-" * 40)
         
         try:
-            # 🎯 СПЕЦІАЛЬНИЙ ВИКЛИК ДЛЯ ОТРИМАННЯ СИРОЇ ВІДПОВІДІ STAGE1
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{client.stage1_model}:generateContent?key={api_key}"
-            payload = client._build_stage1_payload(test_uri, stage1_prompt)
+            payload = client._build_stage1_payload(test_domain, stage1_prompt)
             
             print("🔧 Making raw Stage1 request...")
             start_time = asyncio.get_event_loop().time()
@@ -772,7 +579,6 @@ if __name__ == "__main__":
                 print(json.dumps(resp_data, indent=2, ensure_ascii=False))
                 print("=" * 50)
                 
-                # Витягуємо grounding status та текст
                 candidates = resp_data.get("candidates", [])
                 if candidates:
                     candidate = candidates[0]
@@ -788,17 +594,14 @@ if __name__ == "__main__":
                         print(text_response)
                         print("=" * 50)
                         
-                        # === STAGE 2 TEST ===
                         print("\n🧠 STAGE 2 - Business Analysis:")
                         print("-" * 40)
                         
-                        # Простий system prompt для тесту
                         system_prompt = """You are a website analyzer. Analyze the provided content and return structured business information in JSON format according to the provided schema."""
                         
                         try:
-                            # 🎯 СПЕЦІАЛЬНИЙ ВИКЛИК ДЛЯ ОТРИМАННЯ СИРОГО JSON
                             url = f"https://generativelanguage.googleapis.com/v1beta/models/{client.stage2_model}:generateContent?key={api_key}"
-                            payload = client._build_stage2_payload(test_uri, text_response, system_prompt)
+                            payload = client._build_stage2_payload(test_domain, text_response, system_prompt)
                             
                             print("🔧 Making raw Stage2 request...")
                             start_time = asyncio.get_event_loop().time()
@@ -820,7 +623,6 @@ if __name__ == "__main__":
                                 print(json.dumps(resp_data, indent=2, ensure_ascii=False))
                                 print("=" * 50)
                                 
-                                # Показуємо ТІЛЬКИ сирий JSON текст від Gemini
                                 candidates = resp_data.get("candidates", [])
                                 if candidates:
                                     content = candidates[0].get("content", {})
@@ -832,7 +634,6 @@ if __name__ == "__main__":
                                         print(raw_json_text)
                                         print("=" * 50)
                                         
-                                        # Перевірка парсингу
                                         try:
                                             parsed_json = json.loads(raw_json_text)
                                             print(f"\n✅ JSON parsing: SUCCESS ({len(parsed_json)} fields)")
@@ -867,14 +668,9 @@ if __name__ == "__main__":
         print(f"⏱️  Used custom delay: {client.start_delay_ms}ms (configurable)")
     
     async def main_test():
-        """Головна функція тестування"""
-        
-        # Визначаємо режим тестування
         if len(sys.argv) == 1:
-            # Без параметрів - беремо з MongoDB
             api_key, proxy_config = await test_with_mongo_credentials()
         else:
-            # З параметрами - ручний режим
             api_key, proxy_config = await test_with_manual_credentials()
         
         if api_key and proxy_config:
@@ -886,5 +682,4 @@ if __name__ == "__main__":
             print("2. Manual mode: python gemini_client.py <API_KEY> <PROXY_PROTOCOL> <PROXY_IP:PORT> [USERNAME:PASSWORD]")
             print("   Example: python gemini_client.py AIz... http 1.2.3.4:8080 user:pass")
     
-    # Запускаємо тест
     asyncio.run(main_test())

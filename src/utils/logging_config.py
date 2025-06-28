@@ -8,10 +8,8 @@ from enum import Enum
 from dataclasses import dataclass
 from typing import Dict, Optional
 
-# Константи
 LOG_DIR = Path("logs")
 
-# Для типізації ErrorDetails (якщо потрібно)
 class ErrorType(Enum):
     PROXY = "proxy"
     NETWORK = "network"
@@ -33,7 +31,6 @@ class ErrorDetails:
 
 
 def configure_logging() -> logging.Logger:
-    """Конфігурує основний системний logger"""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_file = LOG_DIR / "system_errors.log"
     logger = logging.getLogger("system_errors")
@@ -52,7 +49,6 @@ def configure_logging() -> logging.Logger:
 
 
 def configure_segmentation_validation_logging() -> logging.Logger:
-    """Конфігурує logger для валідації AI сегментації"""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     seg_val_file = LOG_DIR / "ai_segmentation_validation.log"
 
@@ -71,7 +67,6 @@ def configure_segmentation_validation_logging() -> logging.Logger:
 
 
 def configure_success_timing_logging() -> logging.Logger:
-    """Конфігурує logger для успішних операцій та їх таймінгу"""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     success_log_file = LOG_DIR / "success_timing.log"
     success_logger = logging.getLogger("success_timing")
@@ -88,7 +83,6 @@ def configure_success_timing_logging() -> logging.Logger:
 
 
 def configure_rate_limits_logging() -> logging.Logger:
-    """Конфігурує logger для rate limits"""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     rate_limits_log_file = LOG_DIR / "rate_limits.log"
     rate_limits_logger = logging.getLogger("rate_limits")
@@ -105,7 +99,6 @@ def configure_rate_limits_logging() -> logging.Logger:
 
 
 def configure_http_errors_logging() -> logging.Logger:
-    """Конфігурує logger для HTTP помилок"""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     http_errors_log_file = LOG_DIR / "http_errors.log"
     http_errors_logger = logging.getLogger("http_errors")
@@ -122,7 +115,6 @@ def configure_http_errors_logging() -> logging.Logger:
 
 
 def configure_stage1_issues_logging() -> logging.Logger:
-    """Конфігурує logger для проблем Stage1"""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     stage1_issues_log_file = LOG_DIR / "stage1_issues.log"
     stage1_issues_logger = logging.getLogger("stage1_issues")
@@ -139,7 +131,6 @@ def configure_stage1_issues_logging() -> logging.Logger:
 
 
 def configure_stage2_retries_logging() -> logging.Logger:
-    """🆕 Конфігурує logger для retry спроб Stage2 segments_full валідації"""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     stage2_retries_log_file = LOG_DIR / "stage2_retries.log"
     stage2_retries_logger = logging.getLogger("stage2_retries")
@@ -156,7 +147,6 @@ def configure_stage2_retries_logging() -> logging.Logger:
 
 
 def configure_proxy_errors_logging() -> logging.Logger:
-    """Конфігурує logger для помилок проксі"""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     proxy_errors_log_file = LOG_DIR / "proxy_errors.log"
     proxy_errors_logger = logging.getLogger("proxy_errors")
@@ -173,7 +163,6 @@ def configure_proxy_errors_logging() -> logging.Logger:
 
 
 def configure_network_errors_logging() -> logging.Logger:
-    """Конфігурує logger для мережевих помилок"""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     network_errors_log_file = LOG_DIR / "network_errors.log"
     network_errors_logger = logging.getLogger("network_errors")
@@ -190,7 +179,6 @@ def configure_network_errors_logging() -> logging.Logger:
 
 
 def configure_api_errors_logging() -> logging.Logger:
-    """Конфігурує logger для API помилок"""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     api_errors_log_file = LOG_DIR / "api_errors.log"
     api_errors_logger = logging.getLogger("api_errors")
@@ -207,7 +195,6 @@ def configure_api_errors_logging() -> logging.Logger:
 
 
 def configure_payload_errors_logging() -> logging.Logger:
-    """Конфігурує logger для payload помилок"""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     payload_errors_log_file = LOG_DIR / "payload_errors.log"
     payload_errors_logger = logging.getLogger("payload_errors")
@@ -224,7 +211,6 @@ def configure_payload_errors_logging() -> logging.Logger:
 
 
 def configure_unknown_errors_logging() -> logging.Logger:
-    """Конфігурує logger для невідомих помилок"""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     unknown_errors_log_file = LOG_DIR / "unknown_errors.log"
     unknown_errors_logger = logging.getLogger("unknown_errors")
@@ -241,7 +227,6 @@ def configure_unknown_errors_logging() -> logging.Logger:
 
 
 def configure_revert_reasons_logging() -> logging.Logger:
-    """Конфігурує logger для причин revert операцій"""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     revert_reasons_log_file = LOG_DIR / "revert_reasons.log"
     revert_reasons_logger = logging.getLogger("revert_reasons")
@@ -258,7 +243,6 @@ def configure_revert_reasons_logging() -> logging.Logger:
 
 
 def configure_short_response_debug_logging() -> logging.Logger:
-    """Конфігурує logger для debug коротких відповідей"""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     short_response_debug_log_file = LOG_DIR / "short_response_debug.log"
     short_response_debug_logger = logging.getLogger("short_response_debug")
@@ -275,7 +259,6 @@ def configure_short_response_debug_logging() -> logging.Logger:
 
 
 def configure_ip_usage_logging() -> logging.Logger:
-    """Конфігурує logger для використання IP адрес"""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     ip_usage_log_file = LOG_DIR / "ip_usage.log"
     ip_usage_logger = logging.getLogger("ip_usage")
@@ -292,12 +275,6 @@ def configure_ip_usage_logging() -> logging.Logger:
 
 
 def setup_all_loggers() -> Dict[str, logging.Logger]:
-    """
-    Налаштовує всі логгери системи
-    
-    Returns:
-        Словник з усіма налаштованими логгерами
-    """
     loggers = {
         'system_errors': configure_logging(),
         'segmentation_validation': configure_segmentation_validation_logging(),
@@ -305,7 +282,7 @@ def setup_all_loggers() -> Dict[str, logging.Logger]:
         'rate_limits': configure_rate_limits_logging(),
         'http_errors': configure_http_errors_logging(),
         'stage1_issues': configure_stage1_issues_logging(),
-        'stage2_retries': configure_stage2_retries_logging(),  # 🆕 НОВИЙ LOGGER
+        'stage2_retries': configure_stage2_retries_logging(),
         'proxy_errors': configure_proxy_errors_logging(),
         'network_errors': configure_network_errors_logging(),
         'api_errors': configure_api_errors_logging(),
@@ -316,62 +293,53 @@ def setup_all_loggers() -> Dict[str, logging.Logger]:
         'short_response_debug': configure_short_response_debug_logging(),
     }
     
-    # Налаштовуємо рівень логування для aiohttp
     logging.getLogger('aiohttp.client').setLevel(logging.WARNING)
     
     return loggers
 
 
-# === ФУНКЦІЇ ЛОГУВАННЯ ===
-
-def log_success_timing(worker_id: int, stage: str, api_key: str, target_uri: str, response_time: float, success_timing_logger: logging.Logger):
-    """Логує успішну операцію з часом відповіді"""
+def log_success_timing(worker_id: int, stage: str, api_key: str, domain_full: str, response_time: float, success_timing_logger: logging.Logger):
     masked_key = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
-    short_uri = target_uri[:60] + "..." if len(target_uri) > 60 else target_uri
-    success_timing_logger.info(f"Worker-{worker_id:02d} | {stage:6s} | 200 | {response_time:.1f}s | Key: {masked_key} | {short_uri}")
+    short_domain = domain_full[:60] + "..." if len(domain_full) > 60 else domain_full
+    success_timing_logger.info(f"Worker-{worker_id:02d} | {stage:6s} | 200 | {response_time:.1f}s | Key: {masked_key} | {short_domain}")
 
 
-def log_rate_limit(worker_id: int, stage: str, api_key: str, target_uri: str, freeze_minutes: int, rate_limits_logger: logging.Logger):
-    """Логує досягнення rate limit"""
+def log_rate_limit(worker_id: int, stage: str, api_key: str, domain_full: str, freeze_minutes: int, rate_limits_logger: logging.Logger):
     masked_key = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
-    short_uri = target_uri[:60] + "..." if len(target_uri) > 60 else target_uri
-    rate_limits_logger.info(f"Worker-{worker_id:02d} | {stage:6s} | 429 | Key: {masked_key} | {short_uri} | UNAVAILABLE for 3min (natural filter)")
+    short_domain = domain_full[:60] + "..." if len(domain_full) > 60 else domain_full
+    rate_limits_logger.info(f"Worker-{worker_id:02d} | {stage:6s} | 429 | Key: {masked_key} | {short_domain} | UNAVAILABLE for 3min (natural filter)")
 
 
-def log_http_error(worker_id: int, stage: str, api_key: str, target_uri: str, status_code: int, error_msg: str, http_errors_logger: logging.Logger):
-    """Логує HTTP помилку"""
+def log_http_error(worker_id: int, stage: str, api_key: str, domain_full: str, status_code: int, error_msg: str, http_errors_logger: logging.Logger):
     masked_key = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
-    short_uri = target_uri[:60] + "..." if len(target_uri) > 60 else target_uri
+    short_domain = domain_full[:60] + "..." if len(domain_full) > 60 else domain_full
     short_error = error_msg[:80] + "..." if len(error_msg) > 80 else error_msg
-    http_errors_logger.info(f"Worker-{worker_id:02d} | {stage:6s} | {status_code} | Key: {masked_key} | {short_uri} | {short_error}")
+    http_errors_logger.info(f"Worker-{worker_id:02d} | {stage:6s} | {status_code} | Key: {masked_key} | {short_domain} | {short_error}")
 
 
-def log_stage1_issue(worker_id: int, api_key: str, target_uri: str, issue_type: str, stage1_issues_logger: logging.Logger, details: str = ""):
-    """Логує проблему Stage1"""
+def log_stage1_issue(worker_id: int, api_key: str, domain_full: str, issue_type: str, stage1_issues_logger: logging.Logger, details: str = ""):
     masked_key = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
-    short_uri = target_uri[:60] + "..." if len(target_uri) > 60 else target_uri
-    stage1_issues_logger.info(f"Worker-{worker_id:02d} | {issue_type} | Key: {masked_key} | {short_uri} | {details}")
+    short_domain = domain_full[:60] + "..." if len(domain_full) > 60 else domain_full
+    stage1_issues_logger.info(f"Worker-{worker_id:02d} | {issue_type} | Key: {masked_key} | {short_domain} | {details}")
 
 
-def log_stage2_retry(worker_id: int, api_key: str, target_uri: str, retry_count: int, segments_full: str, stage2_retries_logger: logging.Logger):
-    """🆕 Логує retry спробу Stage2 для segments_full валідації"""
+def log_stage2_retry(worker_id: int, api_key: str, domain_full: str, retry_count: int, segments_full: str, stage2_retries_logger: logging.Logger):
     masked_key = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
-    short_uri = target_uri[:60] + "..." if len(target_uri) > 60 else target_uri
+    short_domain = domain_full[:60] + "..." if len(domain_full) > 60 else domain_full
     short_segments = segments_full[:50] + "..." if len(segments_full) > 50 else segments_full
-    stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {masked_key} | {short_uri} | Invalid segments_full: '{short_segments}'")
+    stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {masked_key} | {short_domain} | Invalid segments_full: '{short_segments}'")
 
 
-def log_error_details(worker_id: int, stage: str, api_key: str, target_uri: str, 
+def log_error_details(worker_id: int, stage: str, api_key: str, domain_full: str, 
                      error_details: ErrorDetails, response_time: float,
                      proxy_errors_logger: logging.Logger, network_errors_logger: logging.Logger,
                      api_errors_logger: logging.Logger, payload_errors_logger: logging.Logger,
                      unknown_errors_logger: logging.Logger):
-    """Логує детальну інформацію про помилку"""
     masked_key = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
-    short_uri = target_uri[:60] + "..." if len(target_uri) > 60 else target_uri
+    short_domain = domain_full[:60] + "..." if len(domain_full) > 60 else domain_full
     
     log_message = (f"Worker-{worker_id:02d} | {stage:6s} | {error_details.exception_class} | "
-                  f"Key: {masked_key} | {short_uri} | {response_time:.1f}s | "
+                  f"Key: {masked_key} | {short_domain} | {response_time:.1f}s | "
                   f"Retry: {error_details.should_retry} | Consumed: {error_details.api_key_consumed} | "
                   f"Action: {error_details.suggested_action} | Details: {error_details.error_message}")
     
@@ -389,18 +357,15 @@ def log_error_details(worker_id: int, stage: str, api_key: str, target_uri: str,
         unknown_errors_logger.info(log_message)
 
 
-def log_proxy_error(worker_id: int, stage: str, proxy_config, target_uri: str, error_msg: str, proxy_errors_logger: logging.Logger):
-    """Логує помилку проксі"""
-    short_uri = target_uri[:60] + "..." if len(target_uri) > 60 else target_uri
+def log_proxy_error(worker_id: int, stage: str, proxy_config, domain_full: str, error_msg: str, proxy_errors_logger: logging.Logger):
+    short_domain = domain_full[:60] + "..." if len(domain_full) > 60 else domain_full
     short_error = error_msg[:100] + "..." if len(error_msg) > 100 else error_msg
-    proxy_errors_logger.info(f"Worker-{worker_id:02d} | {stage:6s} | {proxy_config.connection_string} | {short_uri} | {short_error}")
+    proxy_errors_logger.info(f"Worker-{worker_id:02d} | {stage:6s} | {proxy_config.connection_string} | {short_domain} | {short_error}")
 
 
 if __name__ == "__main__":
-    # Тестування logging_config модуля
     print("=== Logging Configuration Test Suite ===\n")
     
-    # Тест 1: Налаштування всіх логгерів
     print("1. Setting up all loggers:")
     loggers = setup_all_loggers()
     for name, logger in loggers.items():
@@ -408,7 +373,6 @@ if __name__ == "__main__":
         level_name = logging.getLevelName(logger.level)
         print(f"   ✓ {name:25s} → Level: {level_name:8s} → Handlers: {handler_count}")
     
-    # Тест 2: Тест log файлів
     print(f"\n2. Log files created in '{LOG_DIR}' directory:")
     if LOG_DIR.exists():
         log_files = list(LOG_DIR.glob("*.log"))
@@ -418,19 +382,16 @@ if __name__ == "__main__":
     else:
         print("   📁 Log directory will be created on first use")
     
-    # Тест 3: Тестування нової функції логування
     print(f"\n3. Testing new Stage2 retry logging function:")
     
-    # Створюємо тестові дані
     test_worker_id = 1
     test_api_key = "test_key_1234567890abcdef"
-    test_uri = "https://example.com/very/long/path/to/test/website"
+    test_domain = "example.com"
     test_retry_count = 2
     test_segments_full = "this is invalid segments full that does not match"
     
-    # Тестуємо новий stage2 retry logger
     try:
-        log_stage2_retry(test_worker_id, test_api_key, test_uri, test_retry_count, test_segments_full, loggers['stage2_retries'])
+        log_stage2_retry(test_worker_id, test_api_key, test_domain, test_retry_count, test_segments_full, loggers['stage2_retries'])
         print("   ✓ log_stage2_retry() → SUCCESS")
     except Exception as e:
         print(f"   ✗ log_stage2_retry() → ERROR: {e}")

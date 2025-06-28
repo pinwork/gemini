@@ -7,7 +7,6 @@ import ipaddress
 from typing import Optional
 from aiohttp_socks import ProxyType
 
-# Мапінг протоколів проксі на типи aiohttp-socks
 PROXY_PROTOCOL_MAP = {
     'http': ProxyType.HTTP,
     'https': ProxyType.HTTP,
@@ -17,35 +16,15 @@ PROXY_PROTOCOL_MAP = {
 
 
 class ProxyConfig:
-    """
-    Конфігурація проксі-сервера з валідацією та утилітами для роботи з session ID
-    
-    Підтримує HTTP, HTTPS, SOCKS4, SOCKS5 проксі з аутентифікацією та без неї.
-    Автоматично генерує нові session ID для ротації проксі сесій.
-    """
     
     def __init__(self, protocol: str, ip: str, port: int, 
                  username: Optional[str] = None, password: Optional[str] = None):
-        """
-        Ініціалізує конфігурацію проксі
-        
-        Args:
-            protocol: Протокол проксі (http, https, socks4, socks5)
-            ip: IP адреса або домен проксі-сервера
-            port: Порт проксі-сервера (1-65535)
-            username: Ім'я користувача для аутентифікації (опціонально)
-            password: Пароль для аутентифікації (опціонально)
-            
-        Raises:
-            ValueError: При невалідних параметрах
-        """
         self.protocol = protocol.lower()
         self.ip = ip
         self.port = port
         self.username = username if username else None
         self.password = password if password else None
         
-        # Валідація параметрів
         if self.protocol not in PROXY_PROTOCOL_MAP:
             raise ValueError(f"Unsupported proxy protocol: {protocol}. Supported: {list(PROXY_PROTOCOL_MAP.keys())}")
         if not (1 <= port <= 65535):
@@ -53,30 +32,18 @@ class ProxyConfig:
         self._validate_ip_or_domain(ip)
     
     def _validate_ip_or_domain(self, ip: str) -> None:
-        """
-        Валідує IP адресу або доменне ім'я
-        
-        Args:
-            ip: IP адреса або домен для валідації
-            
-        Raises:
-            ValueError: При невалідній IP адресі або домені
-        """
-        # Спробуємо спарсити як IPv4 адресу
         try:
             ipaddress.IPv4Address(ip)
-            return  # Валідна IPv4 адреса
+            return
         except ipaddress.AddressValueError:
             pass
         
-        # Спробуємо спарсити як IPv6 адресу
         try:
             ipaddress.IPv6Address(ip)
-            return  # Валідна IPv6 адреса
+            return
         except ipaddress.AddressValueError:
             pass
         
-        # Валідація доменного імені
         domain_pattern = re.compile(
             r'^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$'
         )
@@ -85,57 +52,28 @@ class ProxyConfig:
     
     @property
     def proxy_type(self) -> ProxyType:
-        """Повертає тип проксі для aiohttp-socks"""
         return PROXY_PROTOCOL_MAP[self.protocol]
     
     @property
     def has_auth(self) -> bool:
-        """Перевіряє чи налаштована аутентифікація"""
         return bool(self.username and self.password)
     
     @property
     def connection_string(self) -> str:
-        """
-        Повертає connection string для логування (з прихованим паролем)
-        
-        Returns:
-            Форматований connection string з замаскованим паролем
-        """
         if self.has_auth:
             return f"{self.protocol}://{self.username}:***@{self.ip}:{self.port}"
         return f"{self.protocol}://{self.ip}:{self.port}"
     
     @property
     def full_url(self) -> str:
-        """
-        Повертає повний URL проксі для підключення (з реальними credentials)
-        
-        Returns:
-            Повний URL проксі включаючи credentials
-        """
         if self.has_auth:
             return f"{self.protocol}://{self.username}:{self.password}@{self.ip}:{self.port}"
         return f"{self.protocol}://{self.ip}:{self.port}"
     
     def has_sessid(self) -> bool:
-        """
-        Перевіряє чи містить username session ID для ротації
-        
-        Returns:
-            True якщо username містить -sessid- pattern
-        """
         return "-sessid-" in self.username.lower() if self.username else False
     
     def generate_new_sessid(self) -> 'ProxyConfig':
-        """
-        Генерує новий ProxyConfig з оновленим session ID
-        
-        Якщо username містить -sessid-, замінює останні 4 символи на нові випадкові цифри.
-        Якщо session ID відсутній, повертає копію поточної конфігурації.
-        
-        Returns:
-            Новий ProxyConfig з оновленим session ID
-        """
         if not self.has_sessid():
             return ProxyConfig(
                 protocol=self.protocol,
@@ -145,7 +83,6 @@ class ProxyConfig:
                 password=self.password
             )
         
-        # Генеруємо новий 4-значний суфікс
         new_suffix = ''.join([str(random.randint(0, 9)) for _ in range(4)])
         new_username = self.username[:-4] + new_suffix
         
@@ -158,12 +95,6 @@ class ProxyConfig:
         )
     
     def get_connection_params(self) -> dict:
-        """
-        Повертає параметри для створення ProxyConnector
-        
-        Returns:
-            Словник з параметрами для aiohttp-socks ProxyConnector
-        """
         params = {
             'proxy_type': self.proxy_type,
             'host': self.ip,
@@ -177,15 +108,6 @@ class ProxyConfig:
         return params
     
     def test_different_ports(self, port_list: list) -> list:
-        """
-        Створює список ProxyConfig з різними портами для тестування
-        
-        Args:
-            port_list: Список портів для тестування
-            
-        Returns:
-            Список ProxyConfig об'єктів з різними портами
-        """
         configs = []
         for port in port_list:
             try:
@@ -198,20 +120,17 @@ class ProxyConfig:
                 )
                 configs.append(config)
             except ValueError:
-                continue  # Пропускаємо невалідні порти
+                continue
         return configs
     
     def __str__(self) -> str:
-        """Повертає connection string для логування"""
         return self.connection_string
     
     def __repr__(self) -> str:
-        """Повертає детальне представлення об'єкта"""
         return (f"ProxyConfig(protocol='{self.protocol}', ip='{self.ip}', "
                 f"port={self.port}, has_auth={self.has_auth}, has_sessid={self.has_sessid()})")
     
     def __eq__(self, other) -> bool:
-        """Порівняння двох ProxyConfig об'єктів"""
         if not isinstance(other, ProxyConfig):
             return False
         return (self.protocol == other.protocol and 
@@ -222,22 +141,6 @@ class ProxyConfig:
 
 
 def create_proxy_from_url(proxy_url: str) -> ProxyConfig:
-    """
-    Створює ProxyConfig з URL строки
-    
-    Args:
-        proxy_url: URL проксі у форматі protocol://[username:password@]host:port
-        
-    Returns:
-        ProxyConfig об'єкт
-        
-    Raises:
-        ValueError: При невалідному URL
-        
-    Examples:
-        >>> create_proxy_from_url("http://proxy.example.com:8080")
-        >>> create_proxy_from_url("socks5://user:pass@1.2.3.4:1080")
-    """
     import urllib.parse
     
     parsed = urllib.parse.urlparse(proxy_url)
@@ -259,26 +162,15 @@ def create_proxy_from_url(proxy_url: str) -> ProxyConfig:
 
 
 def validate_proxy_list(proxy_configs: list) -> tuple:
-    """
-    Валідує список ProxyConfig об'єктів
-    
-    Args:
-        proxy_configs: Список ProxyConfig об'єктів для валідації
-        
-    Returns:
-        Кортеж (valid_configs, invalid_configs, error_messages)
-    """
     valid_configs = []
     invalid_configs = []
     error_messages = []
     
     for i, config in enumerate(proxy_configs):
         try:
-            # Перевіряємо що це дійсно ProxyConfig
             if not isinstance(config, ProxyConfig):
                 raise ValueError(f"Item {i} is not a ProxyConfig instance")
             
-            # Перевіряємо базові параметри
             if not config.ip or not config.port:
                 raise ValueError(f"Missing IP or port in config {i}")
                 
@@ -292,10 +184,8 @@ def validate_proxy_list(proxy_configs: list) -> tuple:
 
 
 if __name__ == "__main__":
-    # Тестування proxy_config модуля
     print("=== Proxy Configuration Test Suite ===\n")
     
-    # Тест 1: Створення різних типів проксі
     print("1. Creating Different Proxy Types:")
     
     test_configs = [
@@ -315,10 +205,9 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"   ✗ {name:15s} → ERROR: {e}")
     
-    # Тест 2: Властивості ProxyConfig
     print(f"\n2. ProxyConfig Properties:")
     if configs:
-        config = configs[1]  # HTTPS з auth
+        config = configs[1]
         print(f"   Protocol: {config.protocol}")
         print(f"   Proxy Type: {config.proxy_type}")
         print(f"   Has Auth: {config.has_auth}")
@@ -327,7 +216,6 @@ if __name__ == "__main__":
         print(f"   Full URL: {config.full_url}")
         print(f"   Connection Params: {config.get_connection_params()}")
     
-    # Тест 3: Session ID генерація
     print(f"\n3. Session ID Generation:")
     sessid_configs = [config for config in configs if config.has_sessid()]
     if sessid_configs:
@@ -341,7 +229,6 @@ if __name__ == "__main__":
     else:
         print("   No configs with session ID found for testing")
     
-    # Тест 4: Валідація помилок
     print(f"\n4. Error Validation:")
     error_tests = [
         ("Invalid protocol", "ftp", "1.2.3.4", 8080),
@@ -357,7 +244,6 @@ if __name__ == "__main__":
         except ValueError as e:
             print(f"   ✓ {name:20s} → Correctly caught: {str(e)[:50]}...")
     
-    # Тест 5: Створення з URL
     print(f"\n5. Creating from URL:")
     test_urls = [
         "http://proxy.example.com:8080",
@@ -373,7 +259,6 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"   ✗ {url:35s} → ERROR: {e}")
     
-    # Тест 6: Валідація списку
     print(f"\n6. Proxy List Validation:")
     valid_configs, invalid_configs, errors = validate_proxy_list(configs)
     print(f"   Total configs: {len(configs)}")
@@ -383,7 +268,6 @@ if __name__ == "__main__":
         for error in errors:
             print(f"   Error: {error}")
     
-    # Тест 7: Порти тестування
     print(f"\n7. Different Ports Testing:")
     if configs:
         base_config = configs[0]

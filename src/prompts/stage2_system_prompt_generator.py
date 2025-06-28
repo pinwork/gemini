@@ -4,7 +4,6 @@
 import random
 import re
 
-# Словник варіацій слів для stage2 системного промпту
 word_variations = {
     "analyzer": ["analyzer", "evaluator", "specialist", "expert", "reviewer"],
     "intelligence": ["intelligence", "insights", "information"],
@@ -39,7 +38,6 @@ word_variations = {
     "instead": ["instead", "rather than"]
 }
 
-# Фразові варіації для stage2
 phrase_variations = {
     "You are a website content analyzer": [
         "You are a website content analyzer",
@@ -122,7 +120,6 @@ phrase_variations = {
     ]
 }
 
-# Базові секції для системного промпту
 base_sections = [
     "You are a website content analyzer optimized for extracting structured business intelligence.",
     "Analyze website content and provide comprehensive business characteristics.",
@@ -173,15 +170,12 @@ base_sections = [
     "Identify the language of the actual words used in domain segments. Use ISO 639-1 codes (en, de, fr), 'mixed' for multiple languages, 'unknown' for unidentifiable terms."
 ]
 
-# Критичні слова які не підлягають заміні
 _CRIT = {"must", "should", "need", "always", "double-check",
          "NOT", "geo_scope", "ALL", "Focus", "VALIDATION"}
 
-# Попередньо скомпільовані регулярні вирази для продуктивності
 compiled_words = {w: re.compile(rf'\b{re.escape(w)}\b', re.I)
                   for w in word_variations if w not in _CRIT}
 
-# Попередньо скомпільовані фікси для типових помилок
 compiled_fixes = [
     (re.compile(r'\bspecialist specialized\b', re.I), 'specialist'),
     (re.compile(r'standard industry-standard', re.I), 'industry-standard'),
@@ -203,12 +197,10 @@ compiled_fixes = [
 
 
 def _pc(src, rep):
-    """Зберігає регістр оригінального слова"""
     return rep.upper() if src.isupper() else rep.capitalize() if src[0].isupper() else rep
 
 
 def _fix_this_list(segment: str) -> str:
-    """Виправляє повторювані 'this' в списках"""
     words = re.findall(r'this\s+(\w+)', segment, flags=re.I)
     seen = set()
     out = []
@@ -223,27 +215,14 @@ def _fix_this_list(segment: str) -> str:
 
 
 def _apply_words(text: str) -> str:
-    """Застосовує варіації слів до тексту"""
     for w, rx in compiled_words.items():
         text = rx.sub(lambda m: _pc(m.group(0), random.choice(word_variations[w])), text)
     return text
 
 
 def generate_system_prompt(segment_combined: str = "", domain_full: str = "") -> str:
-    """
-    Генерує системний промпт для другого етапу аналізу веб-сайту
-    
-    Args:
-        segment_combined: Сегментований домен для аналізу (наприклад, "book store")
-        domain_full: Повний домен (наприклад, "bookstore.com")
-        
-    Returns:
-        Згенерований системний промпт для stage2
-    """
-    # Генеруємо domain_core зі склеювання segment_combined
     domain_core = segment_combined.replace(" ", "") if segment_combined else ""
     
-    # Підставляємо змінні в базові секції
     sections_with_variables = []
     for section in base_sections:
         if "{domain_full}" in section:
@@ -253,17 +232,14 @@ def generate_system_prompt(segment_combined: str = "", domain_full: str = "") ->
         else:
             sections_with_variables.append(section)
     
-    # Застосовуємо варіації фраз і слів
     txt = " ".join(
         _apply_words(random.choice(phrase_variations[s]) if s in phrase_variations else s)
         for s in sections_with_variables
     )
     
-    # Застосовуємо фікси для типових помилок
     for pat, rep in compiled_fixes:
         txt = pat.sub(rep, txt)
     
-    # Нормалізуємо пробіли
     txt = re.sub(r'\s*,\s*', ', ', txt)
     txt = re.sub(r'\s{2,}', ' ', txt)
     
@@ -271,7 +247,6 @@ def generate_system_prompt(segment_combined: str = "", domain_full: str = "") ->
 
 
 if __name__ == "__main__":
-    # Тестування модуля з прикладом сегментації
     test_segment = "book store"
     test_domain = "bookstore.com"
     system_prompt = generate_system_prompt(test_segment, test_domain)

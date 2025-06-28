@@ -30,7 +30,6 @@ from urllib.parse import urlparse, urlunparse
 import ipaddress
 import phonenumbers
 
-# Імпорти наших модулів
 from prompts.stage1_prompt_generator import generate_stage1_prompt
 from prompts.stage2_system_prompt_generator import generate_system_prompt
 from utils.proxy_config import ProxyConfig
@@ -38,18 +37,18 @@ from utils.gemini_client import GeminiClient, create_gemini_client
 from utils.mongo_operations import (
     get_domain_for_analysis, finalize_api_key_usage,
     revert_domain_status, set_domain_error_status, get_domain_segmentation_info,
-    save_contact_information, save_gemini_results, save_gemini_results_with_validation_failed,  # 🆕 НОВИЙ ІМПОРТ
+    save_contact_information, save_gemini_results, save_gemini_results_with_validation_failed,
     update_api_key_ip, needs_ip_refresh
 )
 from utils.validation_utils import (
     has_access_issues, validate_country_code, validate_email, validate_phone_e164,
     validate_segments_language, clean_gemini_results, normalize_url, validate_url_field,
     format_summary, clean_it_prefix, validate_segments_full, clean_phone_for_validation,
-    validate_segments_full_only  # 🆕 НОВИЙ ІМПОРТ ДЛЯ RETRY ЛОГІКИ
+    validate_segments_full_only
 )
 from utils.logging_config import (
     setup_all_loggers, log_success_timing, log_rate_limit, log_http_error,
-    log_stage1_issue, log_error_details, log_proxy_error  # 🔧 ПРИБРАЛИ log_stage2_retry
+    log_stage1_issue, log_error_details, log_proxy_error
 )
 from utils.network_error_classifier import (
     ErrorType, ErrorDetails, classify_exception, is_proxy_error
@@ -61,7 +60,6 @@ MONGO_CONFIG_PATH = CONFIG_DIR / "mongo_config.json"
 STAGE2_SCHEMA_PATH = CONFIG_DIR / "stage2_schema.json"
 CONTROL_FILE_PATH = CONFIG_DIR / "script_control.json"
 
-# 🆕 КОНСТАНТА ДЛЯ МАКСИМАЛЬНОЇ КІЛЬКОСТІ RETRY СПРОБ
 MAX_STAGE2_RETRIES = 5
 
 def load_mongo_config() -> dict:
@@ -83,12 +81,10 @@ def load_stage2_schema() -> dict:
         raise ValueError(f"Invalid JSON in Stage2 schema file at {STAGE2_SCHEMA_PATH}")
 
 def load_script_control() -> dict:
-    """Завантажує конфігурацію скрипта"""
     try:
         with CONTROL_FILE_PATH.open("r", encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError:
-        # Створюємо мінімальний конфіг за замовчуванням
         default_config = {
             "enabled": True,
             "workers": {"concurrent_workers": 40},
@@ -106,16 +102,13 @@ def load_script_control() -> dict:
     except json.JSONDecodeError:
         raise ValueError(f"Invalid JSON in script control file at {CONTROL_FILE_PATH}")
 
-# Завантажуємо конфігурації
 MONGO_CONFIG = load_mongo_config()
 STAGE2_SCHEMA = load_stage2_schema()
 SCRIPT_CONFIG = load_script_control()
 
-# Основні налаштування з конфігу
 API_DB_URI = MONGO_CONFIG["databases"]["main_db"]["uri"]
 CLIENT_PARAMS = MONGO_CONFIG["client_params"]
 
-# Налаштування з script_control.json
 CONCURRENT_WORKERS = SCRIPT_CONFIG["workers"]["concurrent_workers"]
 START_DELAY_MS = SCRIPT_CONFIG["timing"]["start_delay_ms"]
 API_KEY_WAIT_TIME = SCRIPT_CONFIG["timing"]["api_key_wait_time"]
@@ -123,7 +116,6 @@ DOMAIN_WAIT_TIME = SCRIPT_CONFIG["timing"]["domain_wait_time"]
 STAGE1_MODEL = SCRIPT_CONFIG["stage_timings"]["stage1"]["model"]
 STAGE2_MODEL = SCRIPT_CONFIG["stage_timings"]["stage2"]["model"]
 
-# Константи що залишаються в коді
 WORKER_STARTUP_DELAY_SECONDS = 0
 MAX_CONCURRENT_STARTS = 1
 CONNECT_TIMEOUT = 6
@@ -147,14 +139,13 @@ CONNECTION_ERRORS = (
     ClientSSLError
 )
 
-# Налаштовуємо всі логгери
 all_loggers = setup_all_loggers()
 logger = all_loggers['system_errors']
 success_timing_logger = all_loggers['success_timing']
 rate_limits_logger = all_loggers['rate_limits']
 http_errors_logger = all_loggers['http_errors']
 stage1_issues_logger = all_loggers['stage1_issues']
-stage2_retries_logger = all_loggers['stage2_retries']  # 🆕 НОВИЙ LOGGER
+stage2_retries_logger = all_loggers['stage2_retries']
 proxy_errors_logger = all_loggers['proxy_errors']
 network_errors_logger = all_loggers['network_errors']
 api_errors_logger = all_loggers['api_errors']
@@ -165,34 +156,33 @@ revert_reasons_logger = all_loggers['revert_reasons']
 short_response_debug_logger = all_loggers['short_response_debug']
 segmentation_validation_logger = all_loggers['segmentation_validation']
 
-def log_success_timing_wrapper(worker_id: int, stage: str, api_key: str, target_uri: str, response_time: float):
-    log_success_timing(worker_id, stage, api_key, target_uri, response_time, success_timing_logger)
+def log_success_timing_wrapper(worker_id: int, stage: str, api_key: str, domain_full: str, response_time: float):
+    log_success_timing(worker_id, stage, api_key, domain_full, response_time, success_timing_logger)
 
-def log_rate_limit_wrapper(worker_id: int, stage: str, api_key: str, target_uri: str, freeze_minutes: int):
-    log_rate_limit(worker_id, stage, api_key, target_uri, freeze_minutes, rate_limits_logger)
+def log_rate_limit_wrapper(worker_id: int, stage: str, api_key: str, domain_full: str, freeze_minutes: int):
+    log_rate_limit(worker_id, stage, api_key, domain_full, freeze_minutes, rate_limits_logger)
 
-def log_http_error_wrapper(worker_id: int, stage: str, api_key: str, target_uri: str, status_code: int, error_msg: str):
-    log_http_error(worker_id, stage, api_key, target_uri, status_code, error_msg, http_errors_logger)
+def log_http_error_wrapper(worker_id: int, stage: str, api_key: str, domain_full: str, status_code: int, error_msg: str):
+    log_http_error(worker_id, stage, api_key, domain_full, status_code, error_msg, http_errors_logger)
 
-def log_stage1_issue_wrapper(worker_id: int, api_key: str, target_uri: str, issue_type: str, details: str = ""):
-    log_stage1_issue(worker_id, api_key, target_uri, issue_type, stage1_issues_logger, details)
+def log_stage1_issue_wrapper(worker_id: int, api_key: str, domain_full: str, issue_type: str, details: str = ""):
+    log_stage1_issue(worker_id, api_key, domain_full, issue_type, stage1_issues_logger, details)
 
-def log_error_details_wrapper(worker_id: int, stage: str, api_key: str, target_uri: str, 
+def log_error_details_wrapper(worker_id: int, stage: str, api_key: str, domain_full: str, 
                      error_details: ErrorDetails, response_time: float = 0.0):
-    log_error_details(worker_id, stage, api_key, target_uri, error_details, response_time,
+    log_error_details(worker_id, stage, api_key, domain_full, error_details, response_time,
                      proxy_errors_logger, network_errors_logger, api_errors_logger, 
                      payload_errors_logger, unknown_errors_logger)
 
-def log_proxy_error_wrapper(worker_id: int, stage: str, proxy_config, target_uri: str, error_msg: str):
-    log_proxy_error(worker_id, stage, proxy_config, target_uri, error_msg, proxy_errors_logger)
+def log_proxy_error_wrapper(worker_id: int, stage: str, proxy_config, domain_full: str, error_msg: str):
+    log_proxy_error(worker_id, stage, proxy_config, domain_full, error_msg, proxy_errors_logger)
 
 def get_key_suffix(api_key: str) -> str:
     return f"...{api_key[-4:]}" if len(api_key) >= 4 else "***"
 
 def is_script_enabled() -> bool:
-    """Перевіряє чи увімкнений скрипт через конфіг"""
     try:
-        current_config = load_script_control()  # Завжди читаємо свіжий конфіг
+        current_config = load_script_control()
         return current_config.get("enabled", True)
     except Exception as e:
         logger.error(f"Error reading control file: {e}")
@@ -211,19 +201,7 @@ def clear_logs():
 
 clear_logs()
 
-# Глобальний контроль таймінгу тепер в GeminiClient
-
 async def get_api_key_and_proxy(mongo_client: AsyncIOMotorClient, stage: str = "stage1") -> Tuple[str, ProxyConfig, str, dict]:
-    """
-    Отримує API ключ з врахуванням етапу та його cooldown часу
-    
-    Args:
-        mongo_client: MongoDB клієнт
-        stage: "stage1" або "stage2"
-        
-    Returns:
-        Кортеж (api_key, proxy_config, key_record_id, api_key_record)
-    """
     stage_config = SCRIPT_CONFIG["stage_timings"].get(stage, SCRIPT_CONFIG["stage_timings"]["stage1"])
     cooldown_minutes = stage_config["cooldown_minutes"]
     api_provider = stage_config["api_provider"]
@@ -234,12 +212,11 @@ async def get_api_key_and_proxy(mongo_client: AsyncIOMotorClient, stage: str = "
         
         api_keys_collection = mongo_client["api"]["data"]
         
-        # 🆕 ДОДАЛИ api_provider фільтр та динамічний cooldown
         api_key_record = await api_keys_collection.find_one_and_update(
             {
-                "api_provider": api_provider,      # 🆕 НОВИЙ ФІЛЬТР
+                "api_provider": api_provider,
                 "api_status": "active",
-                "api_last_used_date": {"$lt": cooldown_ago},  # 🆕 ДИНАМІЧНИЙ COOLDOWN
+                "api_last_used_date": {"$lt": cooldown_ago},
                 "proxy_ip": {"$ne": None, "$ne": ""}
             },
             {
@@ -287,14 +264,10 @@ async def get_api_key_and_proxy(mongo_client: AsyncIOMotorClient, stage: str = "
             continue
 
 async def get_current_ip_with_retry(proxy_config: ProxyConfig, mongo_client: AsyncIOMotorClient, key_id: str, max_attempts: int = 4) -> Tuple[ProxyConfig, str]:
-    """
-    Отримує поточну IP адресу через проксі з ретраями
-    """
     current_proxy = proxy_config
     
     for attempt in range(max_attempts):
         try:
-            # Налаштовуємо проксі connector
             connector_params = current_proxy.get_connection_params()
             connector_params.update({
                 'ssl': SSL_CONTEXT,
@@ -318,11 +291,9 @@ async def get_current_ip_with_retry(proxy_config: ProxyConfig, mongo_client: Asy
                     if not ip:
                         raise RuntimeError("Empty IP response")
                     
-                    # Використовуємо функцію з mongo_operations модуля
                     if await update_api_key_ip(mongo_client, key_id, ip, ip_usage_logger):
                         return current_proxy, ip
                     else:
-                        # Duplicate IP, try new session
                         current_proxy = current_proxy.generate_new_sessid()
                         continue
                         
@@ -333,26 +304,25 @@ async def get_current_ip_with_retry(proxy_config: ProxyConfig, mongo_client: Asy
             
     return current_proxy, ""
 
-async def handle_stage_result(mongo_client, worker_id, stage_name, api_key, target_uri, proxy_config, key_record_id, result):
-    """Обробляє результат виконання етапу аналізу"""
+async def handle_stage_result(mongo_client, worker_id, stage_name, api_key, domain_full, proxy_config, key_record_id, result):
     status_code = result.get("status_code")
     response_time = result.get("response_time", 0)
     
     if status_code == 200:
-        log_success_timing_wrapper(worker_id, stage_name, api_key, target_uri, response_time)
+        log_success_timing_wrapper(worker_id, stage_name, api_key, domain_full, response_time)
     elif status_code == 429:
         freeze_minutes = 3
-        log_rate_limit_wrapper(worker_id, stage_name, api_key, target_uri, freeze_minutes)
+        log_rate_limit_wrapper(worker_id, stage_name, api_key, domain_full, freeze_minutes)
     elif status_code is not None:
         error_details = classify_exception(None, status_code)
-        log_error_details_wrapper(worker_id, stage_name, api_key, target_uri, error_details, response_time)
+        log_error_details_wrapper(worker_id, stage_name, api_key, domain_full, error_details, response_time)
     else:
         exception = result.get("exception")
         if exception:
             error_details = result.get("error_details") or classify_exception(exception)
-            log_error_details_wrapper(worker_id, stage_name, api_key, target_uri, error_details, response_time)
+            log_error_details_wrapper(worker_id, stage_name, api_key, domain_full, error_details, response_time)
         else:
-            unknown_errors_logger.info(f"Worker-{worker_id:02d} | {stage_name:6s} | UNKNOWN | No exception or status code | {target_uri}")
+            unknown_errors_logger.info(f"Worker-{worker_id:02d} | {stage_name:6s} | UNKNOWN | No exception or status code | {domain_full}")
     
     api_key_consumed = True
     is_proxy_err = False
@@ -372,10 +342,8 @@ async def handle_stage_result(mongo_client, worker_id, stage_name, api_key, targ
     await finalize_api_key_usage(mongo_client, key_record_id, status_code, is_proxy_err, proxy_config, freeze_minutes_param)
 
 async def worker(worker_id: int):
-    """Основна функція worker'а з використанням GeminiClient та retry логікою для segments_full"""
     mongo_client = AsyncIOMotorClient(API_DB_URI, **CLIENT_PARAMS)
     
-    # Створюємо Gemini клієнт
     gemini_client = create_gemini_client(STAGE2_SCHEMA)
     
     try:
@@ -386,10 +354,8 @@ async def worker(worker_id: int):
             try:
                 target_uri, domain_full, domain_id = await get_domain_for_analysis(mongo_client)
                 
-                # Get segmentation info for the domain
                 segment_combined = await get_domain_segmentation_info(mongo_client, domain_full)
                 
-                # ========== STAGE 1 EXECUTION ==========
                 api_key1, proxy_config1, key_record_id1, key_rec1 = await get_api_key_and_proxy(mongo_client, "stage1")
                 if needs_ip_refresh(key_rec1):
                     working_proxy1, detected_ip1 = await get_current_ip_with_retry(
@@ -407,13 +373,12 @@ async def worker(worker_id: int):
                     continue
                 
                 try:
-                    # Використовуємо GeminiClient для Stage1 з Google Search
                     stage1_prompt = generate_stage1_prompt()
                     
                     stage1_result = await gemini_client.analyze_content(
-                        target_uri, api_key1, working_proxy1, stage1_prompt, use_google_search=True
+                        domain_full, api_key1, working_proxy1, stage1_prompt, use_google_search=True
                     )
-                    await handle_stage_result(mongo_client, worker_id, "Stage1", api_key1, target_uri, working_proxy1, key_record_id1, stage1_result)
+                    await handle_stage_result(mongo_client, worker_id, "Stage1", api_key1, domain_full, working_proxy1, key_record_id1, stage1_result)
                     
                     if not stage1_result["success"] or stage1_result.get("status_code") != 200:
                         await revert_domain_status(mongo_client, domain_id, "stage1_request_failed", revert_reasons_logger)
@@ -423,41 +388,39 @@ async def worker(worker_id: int):
                     text_response = stage1_result.get("text_response", "")
                     
                     if grounding_status == "NO_CANDIDATES":
-                        log_stage1_issue_wrapper(worker_id, api_key1, target_uri, "NO_CANDIDATES", "")
+                        log_stage1_issue_wrapper(worker_id, api_key1, domain_full, "NO_CANDIDATES", "")
                         await revert_domain_status(mongo_client, domain_id, "no_candidates", revert_reasons_logger)
                         continue
                     
                     if len(text_response.strip()) < 200:
-                        # Check content of short response
                         response_lower = text_response.lower()
                         if "inaccessible" in response_lower:
-                            log_stage1_issue_wrapper(worker_id, api_key1, target_uri, "WEBSITE_INACCESSIBLE", "Short response with inaccessible")
+                            log_stage1_issue_wrapper(worker_id, api_key1, domain_full, "WEBSITE_INACCESSIBLE", "Short response with inaccessible")
                             await set_domain_error_status(mongo_client, domain_id, "inaccessible")
                             continue
                         elif "placeholder" in response_lower:
-                            log_stage1_issue_wrapper(worker_id, api_key1, target_uri, "PLACEHOLDER_PAGE", "Short response with placeholder")
+                            log_stage1_issue_wrapper(worker_id, api_key1, domain_full, "PLACEHOLDER_PAGE", "Short response with placeholder")
                             await set_domain_error_status(mongo_client, domain_id, "placeholder")
                             continue
                         else:
-                            log_stage1_issue_wrapper(worker_id, api_key1, target_uri, "SHORT_RESPONSE", f"{len(text_response)} chars")
-                            # Log full response content for debugging
+                            log_stage1_issue_wrapper(worker_id, api_key1, domain_full, "SHORT_RESPONSE", f"{len(text_response)} chars")
                             short_response_debug_logger.info(f"Domain: {domain_full} | Length: {len(text_response)} | Content: {text_response}")
                             await revert_domain_status(mongo_client, domain_id, "short_response", revert_reasons_logger)
                             continue
                     
                     if grounding_status == "URL_RETRIEVAL_STATUS_ERROR":
-                        log_stage1_issue_wrapper(worker_id, api_key1, target_uri, "URL_RETRIEVAL_ERROR", "")
+                        log_stage1_issue_wrapper(worker_id, api_key1, domain_full, "URL_RETRIEVAL_ERROR", "")
                         await revert_domain_status(mongo_client, domain_id, "url_retrieval_error", revert_reasons_logger)
                         continue
                     
                     if grounding_status == "NON_JSON_RESPONSE":
-                        log_stage1_issue_wrapper(worker_id, api_key1, target_uri, "NON_JSON_RESPONSE", "API returned HTML")
+                        log_stage1_issue_wrapper(worker_id, api_key1, domain_full, "NON_JSON_RESPONSE", "API returned HTML")
                         await revert_domain_status(mongo_client, domain_id, "non_json_response", revert_reasons_logger)
                         continue
                     
                 except Exception as stage1_exception:
                     error_details = classify_exception(stage1_exception)
-                    log_error_details_wrapper(worker_id, "Stage1", api_key1, target_uri, error_details)
+                    log_error_details_wrapper(worker_id, "Stage1", api_key1, domain_full, error_details)
                     
                     is_proxy_err = error_details.error_type == ErrorType.PROXY
                     await finalize_api_key_usage(mongo_client, key_record_id1, None, is_proxy_err, working_proxy1)
@@ -465,15 +428,13 @@ async def worker(worker_id: int):
                     await revert_domain_status(mongo_client, domain_id, f"stage1_exception:{error_details.exception_class}", revert_reasons_logger)
                     continue
                 
-                # ========== 🆕 STAGE 2 RETRY LOGIC (MAX 5 ATTEMPTS) ==========
                 retry_count = 0
                 stage2_success = False
                 final_stage2_result = None
                 current_system_prompt = generate_system_prompt(segment_combined, domain_full)
                 
-                while retry_count <= MAX_STAGE2_RETRIES and not stage2_success:  # <= щоб включити 0
+                while retry_count <= MAX_STAGE2_RETRIES and not stage2_success:
                     try:
-                        # Отримуємо новий API ключ для кожної спроби Stage2
                         api_key2, proxy_config2, key_record_id2, key_rec2 = await get_api_key_and_proxy(mongo_client, "stage2")
                         if needs_ip_refresh(key_rec2):
                             working_proxy2, detected_ip2 = await get_current_ip_with_retry(
@@ -487,88 +448,71 @@ async def worker(worker_id: int):
                         
                         if not detected_ip2:
                             await finalize_api_key_usage(mongo_client, key_record_id2, None, True, working_proxy2)
-                            # 🔧 ЛОГУЄМО ЯК RETRY З УНІФІКОВАНИМ ФОРМАТОМ
-                            stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {get_key_suffix(api_key2)} | {target_uri} | Proxy IP refresh failed")
+                            stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {get_key_suffix(api_key2)} | {domain_full} | Proxy IP refresh failed")
                             retry_count += 1
                             continue
                         
-                        # Виконуємо Stage2 запит
                         stage2_result = await gemini_client.analyze_business(
-                            target_uri, text_response, api_key2, working_proxy2, current_system_prompt
+                            domain_full, text_response, api_key2, working_proxy2, current_system_prompt
                         )
-                        await handle_stage_result(mongo_client, worker_id, "Stage2", api_key2, target_uri, working_proxy2, key_record_id2, stage2_result)
+                        await handle_stage_result(mongo_client, worker_id, "Stage2", api_key2, domain_full, working_proxy2, key_record_id2, stage2_result)
                         
                         if stage2_result.get("success") and stage2_result.get("status_code") == 200:
                             result = stage2_result["result"]
                             
-                            # 🔧 ВИПРАВЛЕННЯ: СПОЧАТКУ ОЧИЩАЄМО, ПОТІМ ВАЛІДУЄМО
                             cleaned_result = clean_gemini_results(result, segment_combined, domain_full, segmentation_validation_logger)
                             cleaned_segments_full = cleaned_result.get("segments_full", "")
                             is_segments_valid = validate_segments_full_only(segment_combined, cleaned_segments_full, domain_full)
                             
                             if is_segments_valid:
-                                # ✅ ВАЛІДАЦІЯ ПРОЙШЛА - зберігаємо результат та виходимо з циклу
                                 stage2_success = True
-                                final_stage2_result = cleaned_result  # Зберігаємо ОЧИЩЕНИЙ результат
-                                
-                                # 🚫 ПРИБИРАЄМО SUCCESS ЛОГИ - логуємо тільки проблеми
+                                final_stage2_result = cleaned_result
                                 break
                             else:
-                                # ❌ ВАЛІДАЦІЯ НЕ ПРОЙШЛА - логуємо retry у УНІФІКОВАНОМУ форматі
                                 original_segments_full = result.get("segments_full", "")
-                                stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {get_key_suffix(api_key2)} | {target_uri} | segments_full validation failed | Expected: '{segment_combined}' | AI original: '{original_segments_full}' | AI cleaned: '{cleaned_segments_full}'")
+                                stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {get_key_suffix(api_key2)} | {domain_full} | segments_full validation failed | Expected: '{segment_combined}' | AI original: '{original_segments_full}' | AI cleaned: '{cleaned_segments_full}'")
                                 retry_count += 1
-                                # Не робимо break - продовжуємо retry цикл
                         else:
-                            # 🔧 ДЕТАЛЬНЕ ЛОГУВАННЯ ПРИЧИНИ НЕВДАЧІ
                             success = stage2_result.get("success", False)
                             status = stage2_result.get('status_code', 'None')
                             error_msg = stage2_result.get('error', 'No error message')
                             
                             if status == 200 and not success:
-                                # Статус 200 але success=False - логуємо детальну причину
-                                stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {get_key_suffix(api_key2)} | {target_uri} | HTTP 200 but processing failed | Error: {error_msg}")
+                                stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {get_key_suffix(api_key2)} | {domain_full} | HTTP 200 but processing failed | Error: {error_msg}")
                             else:
-                                # Інші помилки
-                                stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {get_key_suffix(api_key2)} | {target_uri} | HTTP {status} | Error: {error_msg}")
+                                stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {get_key_suffix(api_key2)} | {domain_full} | HTTP {status} | Error: {error_msg}")
                             
                             retry_count += 1
                             
                     except Exception as stage2_exception:
                         error_details = classify_exception(stage2_exception)
-                        log_error_details_wrapper(worker_id, "Stage2", api_key2, target_uri, error_details)
+                        log_error_details_wrapper(worker_id, "Stage2", api_key2, domain_full, error_details)
                         
                         is_proxy_err = error_details.error_type == ErrorType.PROXY
                         await finalize_api_key_usage(mongo_client, key_record_id2, None, is_proxy_err, working_proxy2)
                         
-                        # 🔧 ЛОГУЄМО EXCEPTION У УНІФІКОВАНОМУ ФОРМАТІ
-                        stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {get_key_suffix(api_key2)} | {target_uri} | Exception: {error_details.exception_class}")
+                        stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {get_key_suffix(api_key2)} | {domain_full} | Exception: {error_details.exception_class}")
                         retry_count += 1
                 
-                # ========== ЗБЕРЕЖЕННЯ РЕЗУЛЬТАТІВ ==========
                 if stage2_success and final_stage2_result:
-                    # ✅ УСПІШНА ВАЛІДАЦІЯ - зберігаємо нормально
                     await save_gemini_results(
-                        mongo_client, domain_full, target_uri, final_stage2_result, 
+                        mongo_client, domain_full, final_stage2_result, 
                         grounding_status, domain_id, segment_combined, 
                         revert_logger=revert_reasons_logger, 
                         segmentation_logger=segmentation_validation_logger
                     )
                 else:
-                    # ❌ ВСІ RETRY ВИЧЕРПАНІ - використовуємо fallback з validation_failed
                     if final_stage2_result is None and 'stage2_result' in locals():
-                        # Якщо взагалі не отримали результату - беремо останню спробу (може бути пустий)
                         final_stage2_result = stage2_result.get("result", {}) if stage2_result else {}
                     
                     await save_gemini_results_with_validation_failed(
                         mongo_client=mongo_client,
                         domain_full=domain_full,
-                        target_uri=target_uri,
                         gemini_result=final_stage2_result or {},
                         grounding_status=grounding_status,
                         domain_id=domain_id,
                         segment_combined=segment_combined,
-                        retry_count=retry_count - 1,  # Віднімаємо 1 бо retry_count збільшувався навіть для останньої спроби
+                        retry_count=retry_count - 1,
                         stage2_retries_logger=stage2_retries_logger
                     )
                     
@@ -584,7 +528,6 @@ async def worker(worker_id: int):
 async def main():
     workers = []
     try:
-        # Читаємо свіжі налаштування з конфігу
         current_workers = SCRIPT_CONFIG["workers"]["concurrent_workers"]
         stage1_model = SCRIPT_CONFIG["stage_timings"]["stage1"]["model"]
         stage2_model = SCRIPT_CONFIG["stage_timings"]["stage2"]["model"]
@@ -593,9 +536,7 @@ async def main():
         
         print(f"🚀 Starting {current_workers} workers...")
         print(f"🧪 Model configuration: Stage1={stage1_model} ({stage1_cooldown}min) | Stage2={stage2_model} ({stage2_cooldown}min)")
-        print(f"⏱️  Request interval: {START_DELAY_MS}ms between requests")
-        print(f"🔄 Stage2 retry logic: MAX {MAX_STAGE2_RETRIES} attempts (Retry #0 to #{MAX_STAGE2_RETRIES}) for segments_full validation")  # 🔧 УТОЧНЕНИЙ ПРИНТ
-        
+        print(f"⏱️  Request interval: {START_DELAY_MS}ms between requests")        
         workers = [
             asyncio.create_task(worker(worker_id))
             for worker_id in range(current_workers)
