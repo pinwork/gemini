@@ -535,8 +535,8 @@ def clean_all_segmentation_fields(segment_combined: str, gemini_result: dict) ->
     if not segment_combined:
         return gemini_result
     
-    # Генеруємо domain_core segments (джерело правди)
-    valid_segments = set(segment_combined.split())
+    # 🔧 ФІКС: Генеруємо склеєний domain_core (джерело правди)
+    segment_combined_joined = segment_combined.replace(" ", "")
     
     # Очищаємо ВСІ сегментаційні поля однаково
     segmentation_fields = [
@@ -548,9 +548,9 @@ def clean_all_segmentation_fields(segment_combined: str, gemini_result: dict) ->
         if field_name in gemini_result:
             field_value = gemini_result[field_name]
             if field_value:
-                # Залишаємо тільки сегменти що входять в domain_core
+                # 🔧 ФІКС: Залишаємо тільки сегменти що входять в склеєний domain_core
                 cleaned_segments = [seg for seg in field_value.split() 
-                                  if seg in valid_segments]
+                                  if seg in segment_combined_joined]
                 gemini_result[field_name] = " ".join(cleaned_segments)
     
     return gemini_result

@@ -34,6 +34,7 @@ import phonenumbers
 from prompts.stage1_prompt_generator import generate_stage1_prompt
 from prompts.stage2_system_prompt_generator import generate_system_prompt
 from utils.proxy_config import ProxyConfig
+from utils.gemini_client import GeminiClient, create_gemini_client
 from utils.mongo_operations import (
     get_domain_for_analysis, get_api_key_and_proxy, finalize_api_key_usage,
     revert_domain_status, set_domain_error_status, get_domain_segmentation_info,
@@ -81,8 +82,6 @@ API_DB_URI = MONGO_CONFIG["databases"]["main_db"]["uri"]
 CLIENT_PARAMS = MONGO_CONFIG["client_params"]
 
 CONCURRENT_WORKERS = 40
-MAX_CONCURRENT_STARTS = 1
-START_DELAY_MS = 700
 WORKER_STARTUP_DELAY_SECONDS = 0
 
 API_KEY_WAIT_TIME = 60
@@ -91,7 +90,6 @@ CONNECT_TIMEOUT = 6
 SOCK_CONNECT_TIMEOUT = 6
 SOCK_READ_TIMEOUT = 240
 TOTAL_TIMEOUT = 250
-STAGE2_TIMEOUT_SECONDS = 90
 RATE_LIMIT_FREEZE_MINUTES = 3
 
 CONTROL_FILE_PATH = CONFIG_DIR / "script_control.json"
@@ -190,359 +188,56 @@ def clear_logs():
 
 clear_logs()
 
-async def safe_session_request(proxy_config: ProxyConfig, method: str, url: str, stage_name: str = None, **kwargs):
-    if stage_name:
-        await enforce_request_interval(stage_name)
-    
-    if 'timeout' not in kwargs:
-        kwargs['timeout'] = aiohttp.ClientTimeout(
-            total=TOTAL_TIMEOUT,
-            connect=CONNECT_TIMEOUT,
-            sock_connect=SOCK_CONNECT_TIMEOUT,
-            sock_read=SOCK_READ_TIMEOUT
-        )
-    
-    if method.upper() == 'POST' and 'json' in kwargs:
-        if 'headers' not in kwargs:
-            kwargs['headers'] = {}
-        kwargs['headers']["Content-Type"] = "application/json"
-    
-    # Використовуємо метод get_connection_params() з ProxyConfig
-    connector_params = proxy_config.get_connection_params()
-    connector_params.update({
-        'ssl': SSL_CONTEXT,
-        'rdns': True
-    })
-    
-    connector = ProxyConnector(**connector_params)
-    
-    async with aiohttp.ClientSession(connector=connector) as session:
-        async with session.request(method, url, **kwargs) as response:
-            if method.upper() == 'POST':
-                try:
-                    resp_json = await response.json()
-                    return response, resp_json
-                except aiohttp.ContentTypeError:
-                    resp_text = await response.text()
-                    if len(resp_text) > 512:
-                        resp_text = resp_text[:512] + "...[truncated]"
-                    return response, resp_text
-            else:
-                resp_text = await response.text()
-                return response, resp_text
-
-_stage_timing = {
-    "stage1": {"last_request_time": 0, "semaphore": None},
-    "stage2": {"last_request_time": 0, "semaphore": None}
-}
-
-async def enforce_request_interval(stage_name: str):
-    stage_key = stage_name.lower()
-    
-    if stage_key not in _stage_timing:
-        return
-    
-    if _stage_timing[stage_key]["semaphore"] is None:
-        _stage_timing[stage_key]["semaphore"] = asyncio.Semaphore(MAX_CONCURRENT_STARTS)
-    
-    async with _stage_timing[stage_key]["semaphore"]:
-        current_time = time.time()
-        last_time = _stage_timing[stage_key]["last_request_time"]
-        time_since_last = current_time - last_time
-        
-        min_interval = START_DELAY_MS / 1000.0
-        sleep_time = max(0, min_interval - time_since_last)
-        
-        if sleep_time > 0:
-            await asyncio.sleep(sleep_time)
-        
-        _stage_timing[stage_key]["last_request_time"] = time.time()
-
-async def controlled_stage1_request(request_func, *args, **kwargs):
-    return await request_func(*args, **kwargs)
-
-async def controlled_stage2_request(request_func, *args, **kwargs):
-    return await request_func(*args, **kwargs)
-
 async def get_current_ip_with_retry(proxy_config: ProxyConfig, mongo_client: AsyncIOMotorClient, key_id: str, max_attempts: int = 4) -> Tuple[ProxyConfig, str]:
+    """
+    Отримує поточну IP адресу через проксі з ретраями
+    Тепер використовує спрощений підхід без safe_session_request
+    """
     current_proxy = proxy_config
     
     for attempt in range(max_attempts):
         try:
-            response, text = await safe_session_request(
-                current_proxy, 
-                "GET", 
-                "https://icanhazip.com/",
-                None,
-                timeout=aiohttp.ClientTimeout(
-                    total=20,
-                    connect=CONNECT_TIMEOUT,
-                    sock_connect=SOCK_CONNECT_TIMEOUT,
-                    sock_read=15
-                )
+            # Налаштовуємо проксі connector
+            connector_params = current_proxy.get_connection_params()
+            connector_params.update({
+                'ssl': SSL_CONTEXT,
+                'rdns': True
+            })
+            connector = ProxyConnector(**connector_params)
+            
+            timeout = aiohttp.ClientTimeout(
+                total=20,
+                connect=CONNECT_TIMEOUT,
+                sock_connect=SOCK_CONNECT_TIMEOUT,
+                sock_read=15
             )
             
-            if response.status != 200:
-                raise RuntimeError(f"Bad status {response.status}")
-            
-            ip = text.strip()
-            if not ip:
-                raise RuntimeError("Empty IP response")
-            
-            # Використовуємо функцію з mongo_operations модуля
-            if await update_api_key_ip(mongo_client, key_id, ip, ip_usage_logger):
-                return current_proxy, ip
-            else:
-                # Duplicate IP, try new session
-                old_proxy = current_proxy
-                current_proxy = current_proxy.generate_new_sessid()
-                continue
-                
+            async with aiohttp.ClientSession(connector=connector) as session:
+                async with session.get("https://icanhazip.com/", timeout=timeout) as response:
+                    if response.status != 200:
+                        raise RuntimeError(f"Bad status {response.status}")
+                    
+                    ip = (await response.text()).strip()
+                    if not ip:
+                        raise RuntimeError("Empty IP response")
+                    
+                    # Використовуємо функцію з mongo_operations модуля
+                    if await update_api_key_ip(mongo_client, key_id, ip, ip_usage_logger):
+                        return current_proxy, ip
+                    else:
+                        # Duplicate IP, try new session
+                        current_proxy = current_proxy.generate_new_sessid()
+                        continue
+                        
         except Exception:
             if attempt < max_attempts - 1:
-                old_proxy = current_proxy
                 current_proxy = current_proxy.generate_new_sessid()
                 continue
             
     return current_proxy, ""
 
-def format_api_error(raw_response: str) -> str:
-    try:
-        error_data = json.loads(raw_response)
-        if "error" in error_data:
-            error = error_data["error"]
-            code = error.get("code", "Unknown")
-            status = error.get("status", "Unknown")
-            message = error.get("message", "No message")
-            return f"{code} {status}: {message}"
-    except (json.JSONDecodeError, KeyError, AttributeError):
-        pass
-    
-    return raw_response[:200] + "..." if len(raw_response) > 200 else raw_response
-
-def parse_url_status(response_data: dict) -> Tuple[str, str]:
-    candidates = response_data.get("candidates", [])
-    if not candidates:
-        return "NO_CANDIDATES", ""
-    
-    candidate = candidates[0]
-    
-    text_response = candidate.get("content", {}).get("parts", [{}])[0].get("text", "")
-    
-    url_metadata = candidate.get("urlContextMetadata", {}).get("urlMetadata", [])
-    if not url_metadata:
-        return "NO_URL_METADATA", text_response
-    
-    grounding_status = url_metadata[0].get("urlRetrievalStatus", "UNKNOWN")
-    
-    return grounding_status, text_response
-
-async def analyze_website_stage1(target_uri: str, api_key: str, proxy_config: ProxyConfig) -> dict:
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{STAGE1_MODEL}:generateContent?key={api_key}"
-    
-    stage1_prompt = generate_stage1_prompt()
-    
-    user_message = f"Analyze website {target_uri}\n\n{stage1_prompt}"
-    
-    payload = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [
-                    {"text": user_message}
-                ]
-            }
-        ],
-        "tools": [{"urlContext": {}}],
-        "generationConfig": {
-            "temperature": 0.3
-        }
-    }
-
-    start_time = asyncio.get_event_loop().time()
-    
-    try:
-        response, resp_data = await safe_session_request(
-            proxy_config,
-            "POST", 
-            url,
-            "stage1",
-            json=payload
-        )
-        
-        end_time = asyncio.get_event_loop().time()
-        response_time = end_time - start_time
-        
-        if response.status == 200:
-            if isinstance(resp_data, dict):
-                grounding_status, text_response = parse_url_status(resp_data)
-            else:
-                return {
-                    "success": False,
-                    "grounding_status": "NON_JSON_RESPONSE",
-                    "text_response": "",
-                    "error": f"API returned HTML instead of JSON: {resp_data}",
-                    "status_code": response.status,
-                    "response_time": response_time
-                }
-            
-            return {
-                "success": True,
-                "grounding_status": grounding_status,
-                "text_response": text_response,
-                "status_code": response.status,
-                "response_time": response_time
-            }
-        else:
-            formatted_error = format_api_error(str(resp_data))
-            return {
-                "success": False,
-                "grounding_status": "HTTP_ERROR",
-                "text_response": "",
-                "error": f"HTTP {response.status}: {formatted_error}",
-                "status_code": response.status,
-                "response_time": response_time
-            }
-                    
-    except Exception as e:
-        end_time = asyncio.get_event_loop().time()
-        response_time = end_time - start_time
-        
-        error_details = classify_exception(e)
-        
-        error_msg = str(e)
-        if "{" in error_msg and "}" in error_msg:
-            try:
-                json_start = error_msg.find("{")
-                json_part = error_msg[json_start:]
-                formatted_error = format_api_error(json_part)
-                error_msg = error_msg[:json_start] + formatted_error
-            except:
-                pass
-        
-        return {
-            "success": False,
-            "grounding_status": "EXCEPTION",
-            "text_response": "",
-            "error": f"Request failed: {error_msg}",
-            "exception": e,
-            "error_details": error_details,
-            "status_code": None,
-            "response_time": response_time
-        }
-
-async def analyze_website_stage2(target_uri: str, text_content: str, api_key: str, proxy_config: ProxyConfig, 
-                                segment_combined: str = "", domain_full: str = "") -> dict:
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{STAGE2_MODEL}:generateContent?key={api_key}"
-    
-    # Передаємо обидва параметри в generate_system_prompt
-    current_system_prompt = generate_system_prompt(segment_combined, domain_full)
-    
-    user_message = f"Analyze content review of website {target_uri}: {text_content}"
-    
-    schema = STAGE2_SCHEMA
-
-    payload = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [
-                    {"text": user_message}
-                ]
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0.3,
-            "responseMimeType": "application/json",
-            "responseSchema": schema
-        },
-        "systemInstruction": {
-            "parts": [
-                {"text": current_system_prompt}
-            ]
-        }
-    }
-
-    start_time = asyncio.get_event_loop().time()
-
-    try:
-        timeout = aiohttp.ClientTimeout(
-            total=TOTAL_TIMEOUT,
-            connect=CONNECT_TIMEOUT,
-            sock_connect=SOCK_CONNECT_TIMEOUT,
-            sock_read=STAGE2_TIMEOUT_SECONDS
-        )
-        
-        response, resp_data = await safe_session_request(
-            proxy_config,
-            "POST",
-            url,
-            "stage2",
-            json=payload,
-            timeout=timeout
-        )
-        
-        end_time = asyncio.get_event_loop().time()
-        response_time = end_time - start_time
-        
-        if response.status == 200:
-            if not isinstance(resp_data, dict):
-                return {
-                    "success": False,
-                    "status_code": 200,
-                    "response_time": response_time,
-                    "error": f"API returned HTML instead of JSON: {resp_data}"
-                }
-                
-            candidates = resp_data.get("candidates", [])
-            if not candidates:
-                return {"success": False, "status_code": 200, "response_time": response_time, "error": "No candidates in response"}
-            
-            content = candidates[0].get("content", {})
-            parts = content.get("parts", [])
-            if not parts:
-                return {"success": False, "status_code": 200, "response_time": response_time, "error": "No parts in content"}
-            
-            text = parts[0].get("text")
-            if not text:
-                return {"success": False, "status_code": 200, "response_time": response_time, "error": "No text in parts"}
-            
-            try:
-                parsed_result = json.loads(text)
-                return {"success": True, "status_code": 200, "response_time": response_time, "result": parsed_result}
-            except json.JSONDecodeError:
-                return {"success": False, "status_code": 200, "response_time": response_time, "error": "Invalid JSON"}
-                        
-        else:
-            formatted_error = format_api_error(str(resp_data))
-            return {"success": False, "status_code": response.status, "response_time": response_time, "error": f"HTTP {response.status}: {formatted_error}"}
-                    
-    except Exception as e:
-        end_time = asyncio.get_event_loop().time()
-        response_time = end_time - start_time
-        
-        error_details = classify_exception(e)
-        
-        error_msg = str(e)
-        if "{" in error_msg and "}" in error_msg:
-            try:
-                json_start = error_msg.find("{")
-                json_part = error_msg[json_start:]
-                formatted_error = format_api_error(json_part)
-                error_msg = error_msg[:json_start] + formatted_error
-            except:
-                pass
-        
-        return {
-            "success": False, 
-            "status_code": None, 
-            "response_time": response_time, 
-            "error": f"Request failed: {error_msg}", 
-            "exception": e,
-            "error_details": error_details
-        }
-
 async def handle_stage_result(mongo_client, worker_id, stage_name, api_key, target_uri, proxy_config, key_record_id, result):
+    """Обробляє результат виконання етапу аналізу"""
     status_code = result.get("status_code")
     response_time = result.get("response_time", 0)
     
@@ -580,7 +275,11 @@ async def handle_stage_result(mongo_client, worker_id, stage_name, api_key, targ
     await finalize_api_key_usage(mongo_client, key_record_id, status_code, is_proxy_err, proxy_config, freeze_minutes_param)
 
 async def worker(worker_id: int):
+    """Основна функція worker'а з використанням GeminiClient"""
     mongo_client = AsyncIOMotorClient(API_DB_URI, **CLIENT_PARAMS)
+    
+    # 🆕 Створюємо Gemini клієнт
+    gemini_client = create_gemini_client(STAGE2_SCHEMA)
     
     try:
         while True:
@@ -610,7 +309,12 @@ async def worker(worker_id: int):
                     continue
                 
                 try:
-                    stage1_result = await controlled_stage1_request(analyze_website_stage1, target_uri, api_key1, working_proxy1)
+                    # 🆕 Використовуємо GeminiClient для Stage1 з Google Search
+                    # Щоб відключити Google Search: use_google_search=False
+                    stage1_prompt = generate_stage1_prompt()
+                    stage1_result = await gemini_client.analyze_content(
+                        target_uri, api_key1, working_proxy1, stage1_prompt, use_google_search=True
+                    )
                     await handle_stage_result(mongo_client, worker_id, "Stage1", api_key1, target_uri, working_proxy1, key_record_id1, stage1_result)
                     
                     if not stage1_result["success"] or stage1_result.get("status_code") != 200:
@@ -680,10 +384,10 @@ async def worker(worker_id: int):
                     continue
                 
                 try:
-                    # Передаємо domain_full в analyze_website_stage2
-                    stage2_result = await controlled_stage2_request(
-                        analyze_website_stage2, target_uri, text_response, api_key2, working_proxy2, 
-                        segment_combined, domain_full
+                    # 🆕 Використовуємо GeminiClient для Stage2
+                    current_system_prompt = generate_system_prompt(segment_combined, domain_full)
+                    stage2_result = await gemini_client.analyze_business(
+                        target_uri, text_response, api_key2, working_proxy2, current_system_prompt
                     )
                     await handle_stage_result(mongo_client, worker_id, "Stage2", api_key2, target_uri, working_proxy2, key_record_id2, stage2_result)
                     
@@ -725,6 +429,7 @@ async def main():
     try:
         print(f"🚀 Starting {CONCURRENT_WORKERS} workers...")
         print(f"🧪 Model configuration: Stage1={STAGE1_MODEL} | Stage2={STAGE2_MODEL}")
+        print(f"🔧 Using GeminiClient with URL Context + Google Search")
         
         workers = [
             asyncio.create_task(worker(worker_id))
