@@ -220,7 +220,7 @@ def _apply_words(text: str) -> str:
     return text
 
 
-def generate_system_prompt(segment_combined: str = "", domain_full: str = "") -> str:
+def generate_system_prompt(segment_combined: str = "", domain_full: str = "", failed_segments_full: str = "") -> str:
     domain_core = segment_combined.replace(" ", "") if segment_combined else ""
     
     sections_with_variables = []
@@ -231,6 +231,9 @@ def generate_system_prompt(segment_combined: str = "", domain_full: str = "") ->
             sections_with_variables.append(section.format(domain_core=domain_core))
         else:
             sections_with_variables.append(section)
+    
+    if failed_segments_full:
+        sections_with_variables.append(f"WARNING: Be careful reading this prompt instructions because previous response '{failed_segments_full}' failed validation.")
     
     txt = " ".join(
         _apply_words(random.choice(phrase_variations[s]) if s in phrase_variations else s)
@@ -249,13 +252,12 @@ def generate_system_prompt(segment_combined: str = "", domain_full: str = "") ->
 if __name__ == "__main__":
     test_segment = "book store"
     test_domain = "bookstore.com"
+    test_failed = "global multimedia protocols group"
+    
+    print("=== Normal prompt ===")
     system_prompt = generate_system_prompt(test_segment, test_domain)
-    print("Generated Stage2 System Prompt:")
-    print("=" * 50)
-    print(f"Test segment: '{test_segment}'")
-    print(f"Test domain: '{test_domain}'")
-    print(f"Generated domain_core: '{test_segment.replace(' ', '')}'")
-    print("=" * 50)
-    print(system_prompt)
-    print("=" * 50)
-    print(f"System prompt length: {len(system_prompt)} characters")
+    print(system_prompt[-200:])
+    
+    print("\n=== Retry prompt with failed segments ===")
+    retry_prompt = generate_system_prompt(test_segment, test_domain, test_failed)
+    print(retry_prompt[-200:])

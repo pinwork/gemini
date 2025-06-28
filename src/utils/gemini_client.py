@@ -58,10 +58,12 @@ class GeminiClient:
     def __init__(self, 
                  stage1_model: str = DEFAULT_STAGE1_MODEL,
                  stage2_model: str = DEFAULT_STAGE2_MODEL,
+                 stage2_retry_model: Optional[str] = None,
                  stage2_schema: Optional[dict] = None,
                  start_delay_ms: int = DEFAULT_START_DELAY_MS):
         self.stage1_model = stage1_model
         self.stage2_model = stage2_model
+        self.stage2_retry_model = stage2_retry_model or stage2_model
         self.stage2_schema = stage2_schema or {}
         self.start_delay_ms = start_delay_ms
         
@@ -297,8 +299,10 @@ class GeminiClient:
                              text_content: str, 
                              api_key: str, 
                              proxy_config: ProxyConfig,
-                             system_prompt: str) -> dict:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.stage2_model}:generateContent?key={api_key}"
+                             system_prompt: str,
+                             use_retry_model: bool = False) -> dict:
+        model_to_use = self.stage2_retry_model if use_retry_model else self.stage2_model
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_to_use}:generateContent?key={api_key}"
         payload = self._build_stage2_payload(domain_full, text_content, system_prompt)
         
         start_time = asyncio.get_event_loop().time()
@@ -422,6 +426,7 @@ class GeminiClient:
         return {
             "stage1_model": self.stage1_model,
             "stage2_model": self.stage2_model,
+            "stage2_retry_model": self.stage2_retry_model,
             "has_schema": bool(self.stage2_schema),
             "schema_fields": len(self.stage2_schema.get("properties", {})) if self.stage2_schema else 0,
             "stage1_features": ["urlContext", "googleSearch"],
@@ -433,10 +438,13 @@ class GeminiClient:
         }
 
 
-def create_gemini_client(stage2_schema: Optional[dict] = None, start_delay_ms: int = DEFAULT_START_DELAY_MS) -> GeminiClient:
+def create_gemini_client(stage2_schema: Optional[dict] = None, 
+                        start_delay_ms: int = DEFAULT_START_DELAY_MS,
+                        stage2_retry_model: Optional[str] = None) -> GeminiClient:
     return GeminiClient(
         stage1_model=DEFAULT_STAGE1_MODEL,
         stage2_model=DEFAULT_STAGE2_MODEL,
+        stage2_retry_model=stage2_retry_model,
         stage2_schema=stage2_schema,
         start_delay_ms=start_delay_ms
     )
@@ -444,11 +452,13 @@ def create_gemini_client(stage2_schema: Optional[dict] = None, start_delay_ms: i
 
 def create_custom_gemini_client(stage1_model: str, 
                                stage2_model: str, 
+                               stage2_retry_model: Optional[str] = None,
                                stage2_schema: Optional[dict] = None,
                                start_delay_ms: int = DEFAULT_START_DELAY_MS) -> GeminiClient:
     return GeminiClient(
         stage1_model=stage1_model,
         stage2_model=stage2_model,
+        stage2_retry_model=stage2_retry_model,
         stage2_schema=stage2_schema,
         start_delay_ms=start_delay_ms
     )

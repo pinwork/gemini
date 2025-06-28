@@ -115,6 +115,7 @@ API_KEY_WAIT_TIME = SCRIPT_CONFIG["timing"]["api_key_wait_time"]
 DOMAIN_WAIT_TIME = SCRIPT_CONFIG["timing"]["domain_wait_time"]
 STAGE1_MODEL = SCRIPT_CONFIG["stage_timings"]["stage1"]["model"]
 STAGE2_MODEL = SCRIPT_CONFIG["stage_timings"]["stage2"]["model"]
+STAGE2_RETRY_MODEL = SCRIPT_CONFIG["stage_timings"]["stage2"].get("retry_model")
 
 WORKER_STARTUP_DELAY_SECONDS = 0
 MAX_CONCURRENT_STARTS = 1
@@ -344,7 +345,11 @@ async def handle_stage_result(mongo_client, worker_id, stage_name, api_key, doma
 async def worker(worker_id: int):
     mongo_client = AsyncIOMotorClient(API_DB_URI, **CLIENT_PARAMS)
     
-    gemini_client = create_gemini_client(STAGE2_SCHEMA)
+    gemini_client = create_gemini_client(
+        stage2_schema=STAGE2_SCHEMA,
+        start_delay_ms=START_DELAY_MS,
+        stage2_retry_model=STAGE2_RETRY_MODEL
+    )
     
     try:
         while True:
@@ -431,7 +436,8 @@ async def worker(worker_id: int):
                 retry_count = 0
                 stage2_success = False
                 final_stage2_result = None
-                current_system_prompt = generate_system_prompt(segment_combined, domain_full)
+                last_failed_segments_full = ""
+                last_cleaned_segments_full = ""
                 
                 while retry_count <= MAX_STAGE2_RETRIES and not stage2_success:
                     try:
@@ -448,12 +454,19 @@ async def worker(worker_id: int):
                         
                         if not detected_ip2:
                             await finalize_api_key_usage(mongo_client, key_record_id2, None, True, working_proxy2)
-                            stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {get_key_suffix(api_key2)} | {domain_full} | Proxy IP refresh failed")
                             retry_count += 1
                             continue
                         
+                        use_retry_model = retry_count > 0 and STAGE2_RETRY_MODEL is not None
+                        
+                        current_system_prompt = generate_system_prompt(
+                            segment_combined, 
+                            domain_full, 
+                            failed_segments_full=last_failed_segments_full if retry_count > 0 else ""
+                        )
+                        
                         stage2_result = await gemini_client.analyze_business(
-                            domain_full, text_response, api_key2, working_proxy2, current_system_prompt
+                            domain_full, text_response, api_key2, working_proxy2, current_system_prompt, use_retry_model=use_retry_model
                         )
                         await handle_stage_result(mongo_client, worker_id, "Stage2", api_key2, domain_full, working_proxy2, key_record_id2, stage2_result)
                         
@@ -470,18 +483,10 @@ async def worker(worker_id: int):
                                 break
                             else:
                                 original_segments_full = result.get("segments_full", "")
-                                stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {get_key_suffix(api_key2)} | {domain_full} | segments_full validation failed | Expected: '{segment_combined}' | AI original: '{original_segments_full}' | AI cleaned: '{cleaned_segments_full}'")
+                                last_failed_segments_full = original_segments_full
+                                last_cleaned_segments_full = cleaned_segments_full
                                 retry_count += 1
                         else:
-                            success = stage2_result.get("success", False)
-                            status = stage2_result.get('status_code', 'None')
-                            error_msg = stage2_result.get('error', 'No error message')
-                            
-                            if status == 200 and not success:
-                                stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {get_key_suffix(api_key2)} | {domain_full} | HTTP 200 but processing failed | Error: {error_msg}")
-                            else:
-                                stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {get_key_suffix(api_key2)} | {domain_full} | HTTP {status} | Error: {error_msg}")
-                            
                             retry_count += 1
                             
                     except Exception as stage2_exception:
@@ -491,7 +496,6 @@ async def worker(worker_id: int):
                         is_proxy_err = error_details.error_type == ErrorType.PROXY
                         await finalize_api_key_usage(mongo_client, key_record_id2, None, is_proxy_err, working_proxy2)
                         
-                        stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {get_key_suffix(api_key2)} | {domain_full} | Exception: {error_details.exception_class}")
                         retry_count += 1
                 
                 if stage2_success and final_stage2_result:
@@ -513,7 +517,9 @@ async def worker(worker_id: int):
                         domain_id=domain_id,
                         segment_combined=segment_combined,
                         retry_count=retry_count - 1,
-                        stage2_retries_logger=stage2_retries_logger
+                        stage2_retries_logger=stage2_retries_logger,
+                        last_failed_segments_full=last_failed_segments_full,
+                        last_cleaned_segments_full=last_cleaned_segments_full
                     )
                     
             except SystemExit:
@@ -531,11 +537,14 @@ async def main():
         current_workers = SCRIPT_CONFIG["workers"]["concurrent_workers"]
         stage1_model = SCRIPT_CONFIG["stage_timings"]["stage1"]["model"]
         stage2_model = SCRIPT_CONFIG["stage_timings"]["stage2"]["model"]
+        stage2_retry_model = SCRIPT_CONFIG["stage_timings"]["stage2"].get("retry_model")
         stage1_cooldown = SCRIPT_CONFIG["stage_timings"]["stage1"]["cooldown_minutes"]
         stage2_cooldown = SCRIPT_CONFIG["stage_timings"]["stage2"]["cooldown_minutes"]
         
         print(f"🚀 Starting {current_workers} workers...")
         print(f"🧪 Model configuration: Stage1={stage1_model} ({stage1_cooldown}min) | Stage2={stage2_model} ({stage2_cooldown}min)")
+        if stage2_retry_model:
+            print(f"🔄 Retry model: {stage2_retry_model} (used for Stage2 retries)")
         print(f"⏱️  Request interval: {START_DELAY_MS}ms between requests")        
         workers = [
             asyncio.create_task(worker(worker_id))

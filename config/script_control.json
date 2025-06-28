@@ -19,6 +19,7 @@
     },
     "stage2": {
       "model": "gemini-2.5-flash", 
+      "retry_model": "gemini-2.5-flash",
       "cooldown_minutes": 6,
       "api_provider": "gemini"
     }

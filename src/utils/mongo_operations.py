@@ -587,9 +587,11 @@ async def save_gemini_results(mongo_client: AsyncIOMotorClient, domain_full: str
 async def save_gemini_results_with_validation_failed(mongo_client: AsyncIOMotorClient, domain_full: str, 
                                                    gemini_result: dict, grounding_status: str, domain_id: str, 
                                                    segment_combined: str = "", retry_count: int = 0,
-                                                   stage2_retries_logger: Optional[logging.Logger] = None) -> None:
+                                                   stage2_retries_logger: Optional[logging.Logger] = None,
+                                                   last_failed_segments_full: str = "",
+                                                   last_cleaned_segments_full: str = "") -> None:
     if stage2_retries_logger:
-        stage2_retries_logger.info(f"Domain {domain_full}: MAX RETRIES EXCEEDED ({retry_count} attempts) - using validation_failed fallback")
+        stage2_retries_logger.info(f"Domain {domain_full}: MAX RETRIES EXCEEDED ({retry_count} attempts) - using validation_failed fallback | Expected: '{segment_combined}' | AI original: '{last_failed_segments_full}' | AI cleaned: '{last_cleaned_segments_full}'")
     else:
         logger.warning(f"Domain {domain_full}: MAX RETRIES EXCEEDED ({retry_count} attempts) - using validation_failed fallback")
     
@@ -670,7 +672,7 @@ if __name__ == "__main__":
         "get_domain_segmentation_info",
         "save_contact_information", 
         "save_gemini_results",
-        "save_gemini_results_with_validation_failed (🆕 NEW)",
+        "save_gemini_results_with_validation_failed (🆕 UPDATED with simplified logging)",
         "update_api_key_ip",
         "retry_mongo_operation (fallback)"
     ]
