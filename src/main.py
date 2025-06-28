@@ -36,7 +36,7 @@ from prompts.stage2_system_prompt_generator import generate_system_prompt
 from utils.proxy_config import ProxyConfig
 from utils.gemini_client import GeminiClient, create_gemini_client
 from utils.mongo_operations import (
-    get_domain_for_analysis, get_api_key_and_proxy, finalize_api_key_usage,
+    get_domain_for_analysis, finalize_api_key_usage,
     revert_domain_status, set_domain_error_status, get_domain_segmentation_info,
     save_contact_information, save_gemini_results, update_api_key_ip, needs_ip_refresh
 )
@@ -57,6 +57,7 @@ CONFIG_DIR = Path("config")
 LOG_DIR = Path("logs")
 MONGO_CONFIG_PATH = CONFIG_DIR / "mongo_config.json"
 STAGE2_SCHEMA_PATH = CONFIG_DIR / "stage2_schema.json"
+CONTROL_FILE_PATH = CONFIG_DIR / "script_control.json"
 
 def load_mongo_config() -> dict:
     try:
@@ -76,23 +77,55 @@ def load_stage2_schema() -> dict:
     except json.JSONDecodeError:
         raise ValueError(f"Invalid JSON in Stage2 schema file at {STAGE2_SCHEMA_PATH}")
 
+def load_script_control() -> dict:
+    """Завантажує конфігурацію скрипта"""
+    try:
+        with CONTROL_FILE_PATH.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        # Створюємо мінімальний конфіг за замовчуванням
+        default_config = {
+            "enabled": True,
+            "workers": {"concurrent_workers": 40},
+            "timing": {"start_delay_ms": 700, "api_key_wait_time": 60, "domain_wait_time": 60},
+            "stage_timings": {
+                "stage1": {"model": "gemini-2.5-flash", "cooldown_minutes": 3, "api_provider": "gemini"},
+                "stage2": {"model": "gemini-2.0-flash", "cooldown_minutes": 2, "api_provider": "gemini"}
+            }
+        }
+        
+        CONTROL_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with CONTROL_FILE_PATH.open("w", encoding="utf-8") as f:
+            json.dump(default_config, f, indent=2)
+        return default_config
+    except json.JSONDecodeError:
+        raise ValueError(f"Invalid JSON in script control file at {CONTROL_FILE_PATH}")
+
+# Завантажуємо конфігурації
 MONGO_CONFIG = load_mongo_config()
 STAGE2_SCHEMA = load_stage2_schema()
+SCRIPT_CONFIG = load_script_control()
+
+# Основні налаштування з конфігу
 API_DB_URI = MONGO_CONFIG["databases"]["main_db"]["uri"]
 CLIENT_PARAMS = MONGO_CONFIG["client_params"]
 
-CONCURRENT_WORKERS = 40
-WORKER_STARTUP_DELAY_SECONDS = 0
+# Налаштування з script_control.json
+CONCURRENT_WORKERS = SCRIPT_CONFIG["workers"]["concurrent_workers"]
+START_DELAY_MS = SCRIPT_CONFIG["timing"]["start_delay_ms"]
+API_KEY_WAIT_TIME = SCRIPT_CONFIG["timing"]["api_key_wait_time"]
+DOMAIN_WAIT_TIME = SCRIPT_CONFIG["timing"]["domain_wait_time"]
+STAGE1_MODEL = SCRIPT_CONFIG["stage_timings"]["stage1"]["model"]
+STAGE2_MODEL = SCRIPT_CONFIG["stage_timings"]["stage2"]["model"]
 
-API_KEY_WAIT_TIME = 60
-DOMAIN_WAIT_TIME = 60
+# Константи що залишаються в коді
+WORKER_STARTUP_DELAY_SECONDS = 0
+MAX_CONCURRENT_STARTS = 1
 CONNECT_TIMEOUT = 6
 SOCK_CONNECT_TIMEOUT = 6
 SOCK_READ_TIMEOUT = 240
 TOTAL_TIMEOUT = 250
 RATE_LIMIT_FREEZE_MINUTES = 3
-
-CONTROL_FILE_PATH = CONFIG_DIR / "script_control.json"
 
 SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
@@ -108,9 +141,6 @@ CONNECTION_ERRORS = (
     ServerTimeoutError,
     ClientSSLError
 )
-
-STAGE1_MODEL = "gemini-2.5-flash"
-STAGE2_MODEL = "gemini-2.0-flash"
 
 # Налаштовуємо всі логгери
 all_loggers = setup_all_loggers()
@@ -153,27 +183,14 @@ def log_proxy_error_wrapper(worker_id: int, stage: str, proxy_config, target_uri
 def get_key_suffix(api_key: str) -> str:
     return f"...{api_key[-4:]}" if len(api_key) >= 4 else "***"
 
-def ensure_control_file():
-    try:
-        CONTROL_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with CONTROL_FILE_PATH.open("w", encoding="utf-8") as f:
-            json.dump({"enabled": True}, f, indent=2)
-    except Exception as e:
-        logger.error(f"Error setting up control file: {e}")
-
 def is_script_enabled() -> bool:
+    """Перевіряє чи увімкнений скрипт через конфіг"""
     try:
-        if not CONTROL_FILE_PATH.exists():
-            ensure_control_file()
-            return True
-        with CONTROL_FILE_PATH.open("r", encoding="utf-8") as f:
-            control_data = json.load(f)
-            return control_data.get("enabled", True)
+        current_config = load_script_control()  # Завжди читаємо свіжий конфіг
+        return current_config.get("enabled", True)
     except Exception as e:
         logger.error(f"Error reading control file: {e}")
         return True
-
-ensure_control_file()
 
 def clear_logs():
     try:
@@ -188,10 +205,84 @@ def clear_logs():
 
 clear_logs()
 
+# Глобальний контроль таймінгу тепер в GeminiClient
+
+async def get_api_key_and_proxy(mongo_client: AsyncIOMotorClient, stage: str = "stage1") -> Tuple[str, ProxyConfig, str, dict]:
+    """
+    Отримує API ключ з врахуванням етапу та його cooldown часу
+    
+    Args:
+        mongo_client: MongoDB клієнт
+        stage: "stage1" або "stage2"
+        
+    Returns:
+        Кортеж (api_key, proxy_config, key_record_id, api_key_record)
+    """
+    stage_config = SCRIPT_CONFIG["stage_timings"].get(stage, SCRIPT_CONFIG["stage_timings"]["stage1"])
+    cooldown_minutes = stage_config["cooldown_minutes"]
+    api_provider = stage_config["api_provider"]
+    
+    while True:
+        current_time = datetime.now(timezone.utc)
+        cooldown_ago = current_time - timedelta(minutes=cooldown_minutes)
+        
+        api_keys_collection = mongo_client["api"]["data"]
+        
+        # 🆕 ДОДАЛИ api_provider фільтр та динамічний cooldown
+        api_key_record = await api_keys_collection.find_one_and_update(
+            {
+                "api_provider": api_provider,      # 🆕 НОВИЙ ФІЛЬТР
+                "api_status": "active",
+                "api_last_used_date": {"$lt": cooldown_ago},  # 🆕 ДИНАМІЧНИЙ COOLDOWN
+                "proxy_ip": {"$ne": None, "$ne": ""}
+            },
+            {
+                "$set": {"api_last_used_date": current_time}
+            },
+            return_document=ReturnDocument.AFTER
+        )
+        
+        if not api_key_record:
+            if not hasattr(get_api_key_and_proxy, 'wait_count'):
+                get_api_key_and_proxy.wait_count = 0
+            get_api_key_and_proxy.wait_count += 1
+            
+            if get_api_key_and_proxy.wait_count % 10 == 0:
+                logger.warning(f"No available {api_provider} API keys for {stage} (cooldown: {cooldown_minutes}min), waiting... (attempt {get_api_key_and_proxy.wait_count})")
+            await asyncio.sleep(API_KEY_WAIT_TIME)
+            continue
+        
+        try:
+            api_key = api_key_record["api_key"]
+            key_record_id = str(api_key_record["_id"])
+            
+            protocol = api_key_record.get("proxy_protocol", "").strip().lower()
+            ip = api_key_record.get("proxy_ip", "").strip()
+            port = api_key_record.get("proxy_port")
+            username = api_key_record.get("proxy_username", "").strip() or None
+            password = api_key_record.get("proxy_password", "").strip() or None
+            
+            if not protocol or not ip or not port:
+                logger.error(f"Invalid proxy data in API key record: protocol={protocol}, ip={ip}, port={port}")
+                continue
+            
+            proxy_config = ProxyConfig(
+                protocol=protocol,
+                ip=ip,
+                port=int(port),
+                username=username,
+                password=password
+            )
+            
+            return api_key, proxy_config, key_record_id, api_key_record
+            
+        except (ValueError, TypeError, KeyError) as e:
+            logger.error(f"Error parsing API key record: {e}")
+            continue
+
 async def get_current_ip_with_retry(proxy_config: ProxyConfig, mongo_client: AsyncIOMotorClient, key_id: str, max_attempts: int = 4) -> Tuple[ProxyConfig, str]:
     """
     Отримує поточну IP адресу через проксі з ретраями
-    Тепер використовує спрощений підхід без safe_session_request
     """
     current_proxy = proxy_config
     
@@ -278,7 +369,7 @@ async def worker(worker_id: int):
     """Основна функція worker'а з використанням GeminiClient"""
     mongo_client = AsyncIOMotorClient(API_DB_URI, **CLIENT_PARAMS)
     
-    # 🆕 Створюємо Gemini клієнт
+    # Створюємо Gemini клієнт
     gemini_client = create_gemini_client(STAGE2_SCHEMA)
     
     try:
@@ -292,7 +383,8 @@ async def worker(worker_id: int):
                 # Get segmentation info for the domain
                 segment_combined = await get_domain_segmentation_info(mongo_client, domain_full)
                 
-                api_key1, proxy_config1, key_record_id1, key_rec1 = await get_api_key_and_proxy(mongo_client)
+                # 🆕 ПЕРЕДАЄМО STAGE ДЛЯ STAGE1
+                api_key1, proxy_config1, key_record_id1, key_rec1 = await get_api_key_and_proxy(mongo_client, "stage1")
                 if needs_ip_refresh(key_rec1):
                     working_proxy1, detected_ip1 = await get_current_ip_with_retry(
                         proxy_config1, 
@@ -309,9 +401,9 @@ async def worker(worker_id: int):
                     continue
                 
                 try:
-                    # 🆕 Використовуємо GeminiClient для Stage1 з Google Search
-                    # Щоб відключити Google Search: use_google_search=False
+                    # Використовуємо GeminiClient для Stage1 з Google Search
                     stage1_prompt = generate_stage1_prompt()
+                    
                     stage1_result = await gemini_client.analyze_content(
                         target_uri, api_key1, working_proxy1, stage1_prompt, use_google_search=True
                     )
@@ -367,7 +459,8 @@ async def worker(worker_id: int):
                     await revert_domain_status(mongo_client, domain_id, f"stage1_exception:{error_details.exception_class}", revert_reasons_logger)
                     continue
                 
-                api_key2, proxy_config2, key_record_id2, key_rec2 = await get_api_key_and_proxy(mongo_client)
+                # 🆕 ПЕРЕДАЄМО STAGE ДЛЯ STAGE2
+                api_key2, proxy_config2, key_record_id2, key_rec2 = await get_api_key_and_proxy(mongo_client, "stage2")
                 if needs_ip_refresh(key_rec2):
                     working_proxy2, detected_ip2 = await get_current_ip_with_retry(
                         proxy_config2, 
@@ -384,8 +477,9 @@ async def worker(worker_id: int):
                     continue
                 
                 try:
-                    # 🆕 Використовуємо GeminiClient для Stage2
+                    # Використовуємо GeminiClient для Stage2
                     current_system_prompt = generate_system_prompt(segment_combined, domain_full)
+                    
                     stage2_result = await gemini_client.analyze_business(
                         target_uri, text_response, api_key2, working_proxy2, current_system_prompt
                     )
@@ -427,13 +521,20 @@ async def worker(worker_id: int):
 async def main():
     workers = []
     try:
-        print(f"🚀 Starting {CONCURRENT_WORKERS} workers...")
-        print(f"🧪 Model configuration: Stage1={STAGE1_MODEL} | Stage2={STAGE2_MODEL}")
-        print(f"🔧 Using GeminiClient with URL Context + Google Search")
+        # Читаємо свіжі налаштування з конфігу
+        current_workers = SCRIPT_CONFIG["workers"]["concurrent_workers"]
+        stage1_model = SCRIPT_CONFIG["stage_timings"]["stage1"]["model"]
+        stage2_model = SCRIPT_CONFIG["stage_timings"]["stage2"]["model"]
+        stage1_cooldown = SCRIPT_CONFIG["stage_timings"]["stage1"]["cooldown_minutes"]
+        stage2_cooldown = SCRIPT_CONFIG["stage_timings"]["stage2"]["cooldown_minutes"]
+        
+        print(f"🚀 Starting {current_workers} workers...")
+        print(f"🧪 Model configuration: Stage1={stage1_model} ({stage1_cooldown}min) | Stage2={stage2_model} ({stage2_cooldown}min)")
+        print(f"⏱️  Request interval: {START_DELAY_MS}ms between requests")
         
         workers = [
             asyncio.create_task(worker(worker_id))
-            for worker_id in range(CONCURRENT_WORKERS)
+            for worker_id in range(current_workers)
         ]
         
         await asyncio.gather(*workers, return_exceptions=True)

@@ -120,8 +120,32 @@ def _load_mongo_config() -> dict:
     except json.JSONDecodeError:
         raise ValueError(f"Invalid JSON in MongoDB configuration file at {config_path}")
 
-# Глобальна конфігурація
+def _load_script_control() -> dict:
+    """Завантажує конфігурацію скрипта для отримання stage_timings"""
+    config_path = Path(__file__).parent.parent.parent / "config" / "script_control.json"
+    try:
+        with config_path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        # Повертаємо базові налаштування за замовчуванням
+        return {
+            "stage_timings": {
+                "stage1": {"cooldown_minutes": 3, "api_provider": "gemini"},
+                "stage2": {"cooldown_minutes": 2, "api_provider": "gemini"}
+            }
+        }
+    except json.JSONDecodeError:
+        logger.error("Invalid JSON in script control file, using defaults")
+        return {
+            "stage_timings": {
+                "stage1": {"cooldown_minutes": 3, "api_provider": "gemini"},
+                "stage2": {"cooldown_minutes": 2, "api_provider": "gemini"}
+            }
+        }
+
+# Глобальні конфігурації
 MONGO_CONFIG = _load_mongo_config()
+SCRIPT_CONFIG = _load_script_control()
 
 def get_timestamp_ms() -> int:
     """Повертає поточний timestamp в мілісекундах"""
@@ -183,31 +207,40 @@ async def get_domain_for_analysis(mongo_client: AsyncIOMotorClient) -> Tuple[str
         
         return domain_record["target_uri"], domain_record["domain_full"], str(domain_record["_id"])
 
-async def get_api_key_and_proxy(mongo_client: AsyncIOMotorClient) -> Tuple[str, ProxyConfig, str, dict]:
+async def get_api_key_and_proxy(mongo_client: AsyncIOMotorClient, stage: str = "stage1") -> Tuple[str, ProxyConfig, str, dict]:
     """
-    Отримує доступний API ключ з проксі конфігурацією
+    Отримує доступний API ключ з проксі конфігурацією з врахуванням етапу
     З автоматичними ретраями через глобальний патч
     
     Args:
         mongo_client: Клієнт MongoDB
+        stage: "stage1" або "stage2" для динамічного cooldown
         
     Returns:
         Кортеж (api_key, proxy_config, key_record_id, api_key_record)
     """
+    # 🆕 ОТРИМУЄМО КОНФІГУРАЦІЮ ДЛЯ ЕТАПУ
+    stage_config = SCRIPT_CONFIG["stage_timings"].get(stage, SCRIPT_CONFIG["stage_timings"]["stage1"])
+    cooldown_minutes = stage_config["cooldown_minutes"]
+    api_provider = stage_config["api_provider"]
+    
     api_db_name = MONGO_CONFIG["databases"]["api_db"]["name"]
     api_collection_name = MONGO_CONFIG["databases"]["api_db"]["collections"]["keys"]
     
     while True:
         current_time = datetime.now(timezone.utc)
-        three_minutes_ago = current_time - timedelta(minutes=3)
+        # 🆕 ДИНАМІЧНИЙ COOLDOWN ЗАМІСТЬ ЗАХАРДКОРДЖЕНИХ 3 ХВИЛИН
+        cooldown_ago = current_time - timedelta(minutes=cooldown_minutes)
         
         api_keys_collection = mongo_client[api_db_name][api_collection_name]
         
         # Ця операція автоматично ретрайтиться через глобальний патч
+        # 🆕 ДОДАЛИ api_provider ФІЛЬТР та ДИНАМІЧНИЙ COOLDOWN
         api_key_record = await api_keys_collection.find_one_and_update(
             {
+                "api_provider": api_provider,      # 🆕 НОВИЙ ФІЛЬТР
                 "api_status": "active",
-                "api_last_used_date": {"$lt": three_minutes_ago},
+                "api_last_used_date": {"$lt": cooldown_ago},  # 🆕 ДИНАМІЧНИЙ COOLDOWN
                 "proxy_ip": {"$ne": None, "$ne": ""}
             },
             {
@@ -222,7 +255,8 @@ async def get_api_key_and_proxy(mongo_client: AsyncIOMotorClient) -> Tuple[str, 
             get_api_key_and_proxy.wait_count += 1
             
             if get_api_key_and_proxy.wait_count % 10 == 0:
-                logger.warning(f"No available API keys with proxy found, waiting... (attempt {get_api_key_and_proxy.wait_count})")
+                # 🆕 ІНФОРМАТИВНІШЕ ЛОГУВАННЯ З ДЕТАЛЯМИ STAGE
+                logger.warning(f"No available {api_provider} API keys for {stage} (cooldown: {cooldown_minutes}min), waiting... (attempt {get_api_key_and_proxy.wait_count})")
             await asyncio.sleep(API_KEY_WAIT_TIME)
             continue
         
@@ -775,16 +809,22 @@ if __name__ == "__main__":
     # Тестування mongo_operations модуля
     print("=== MongoDB Operations Module Test ===\n")
     
-    print("✅ MongoDB Operations Module loaded successfully with GLOBAL RETRY PATCH")
+    print("✅ MongoDB Operations Module loaded successfully with GLOBAL RETRY PATCH + DYNAMIC STAGE COOLDOWNS")
     print(f"📁 Config loaded from: {MONGO_CONFIG}")
     print(f"🏠 Main DB: {MONGO_CONFIG['databases']['main_db']['name']}")
     print(f"🔑 API DB: {MONGO_CONFIG['databases']['api_db']['name']}")
     print(f"🔄 Retry delay: {RETRY_DELAY} seconds")
     
-    print("\n📋 Available Functions (ALL with automatic retries):")
+    print(f"\n⏱️  Stage Cooldowns:")
+    for stage, config in SCRIPT_CONFIG["stage_timings"].items():
+        cooldown = config["cooldown_minutes"]
+        provider = config["api_provider"]
+        print(f"   📊 {stage}: {cooldown} minutes ({provider} keys)")
+    
+    print("\n📋 Available Functions (ALL with automatic retries + stage-aware cooldowns):")
     functions = [
         "get_domain_for_analysis",
-        "get_api_key_and_proxy", 
+        "get_api_key_and_proxy (now stage-aware)", 
         "finalize_api_key_usage",
         "revert_domain_status",
         "set_domain_error_status",

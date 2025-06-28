@@ -1,3 +1,26 @@
 {
-  "enabled": true
+  "enabled": true,
+  
+  "workers": {
+    "concurrent_workers": 40
+  },
+  
+  "timing": {
+    "start_delay_ms": 700,
+    "api_key_wait_time": 60,
+    "domain_wait_time": 60
+  },
+  
+  "stage_timings": {
+    "stage1": {
+      "model": "gemini-2.5-flash",
+      "cooldown_minutes": 6,
+      "api_provider": "gemini"
+    },
+    "stage2": {
+      "model": "gemini-2.5-flash", 
+      "cooldown_minutes": 6,
+      "api_provider": "gemini"
+    }
+  }
 }

@@ -31,9 +31,8 @@ except ImportError:
 # SSL контекст
 SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
-# Таймінги та обмеження
+# Таймінги та обмеження (тепер без START_DELAY_MS!)
 MAX_CONCURRENT_STARTS = 1
-START_DELAY_MS = 700
 CONNECT_TIMEOUT = 6
 SOCK_CONNECT_TIMEOUT = 6
 SOCK_READ_TIMEOUT = 240
@@ -43,6 +42,7 @@ STAGE2_TIMEOUT_SECONDS = 90
 # Моделі за замовчуванням
 DEFAULT_STAGE1_MODEL = "gemini-2.5-flash"
 DEFAULT_STAGE2_MODEL = "gemini-2.0-flash"
+DEFAULT_START_DELAY_MS = 700  # 🆕 За замовчуванням якщо не передано
 
 # Глобальний стан для контролю таймінгу
 _stage_timing = {
@@ -71,7 +71,8 @@ class GeminiClient:
     def __init__(self, 
                  stage1_model: str = DEFAULT_STAGE1_MODEL,
                  stage2_model: str = DEFAULT_STAGE2_MODEL,
-                 stage2_schema: Optional[dict] = None):
+                 stage2_schema: Optional[dict] = None,
+                 start_delay_ms: int = DEFAULT_START_DELAY_MS):  # 🆕 НОВИЙ ПАРАМЕТР
         """
         Ініціалізує Gemini клієнт
         
@@ -79,10 +80,12 @@ class GeminiClient:
             stage1_model: Модель для Stage1 аналізу
             stage2_model: Модель для Stage2 аналізу  
             stage2_schema: JSON схема для Stage2 відповідей
+            start_delay_ms: Пауза між запитами в мілісекундах
         """
         self.stage1_model = stage1_model
         self.stage2_model = stage2_model
         self.stage2_schema = stage2_schema or {}
+        self.start_delay_ms = start_delay_ms  # 🆕 ЗБЕРІГАЄМО В INSTANCE
         
         # Ініціалізуємо семафори для контролю конкурентності
         if _stage_timing["stage1"]["semaphore"] is None:
@@ -130,7 +133,8 @@ class GeminiClient:
             last_time = _stage_timing[stage_key]["last_request_time"]
             time_since_last = current_time - last_time
             
-            min_interval = START_DELAY_MS / 1000.0
+            # 🆕 ВИКОРИСТОВУЄМО self.start_delay_ms ЗАМІСТЬ КОНСТАНТИ
+            min_interval = self.start_delay_ms / 1000.0
             sleep_time = max(0, min_interval - time_since_last)
             
             if sleep_time > 0:
@@ -575,19 +579,20 @@ class GeminiClient:
             "stage1_features": ["urlContext", "googleSearch"],
             "stage2_features": ["JSON_schema", "systemInstruction"],
             "timing_intervals": {
-                "start_delay_ms": START_DELAY_MS,
+                "start_delay_ms": self.start_delay_ms,  # 🆕 ТЕПЕР ДИНАМІЧНИЙ
                 "max_concurrent": MAX_CONCURRENT_STARTS
             }
         }
 
 
-# Фабричні функції для зручності
-def create_gemini_client(stage2_schema: Optional[dict] = None) -> GeminiClient:
+# 🆕 ОНОВЛЕНІ ФАБРИЧНІ ФУНКЦІЇ З start_delay_ms
+def create_gemini_client(stage2_schema: Optional[dict] = None, start_delay_ms: int = DEFAULT_START_DELAY_MS) -> GeminiClient:
     """
     Створює GeminiClient з налаштуваннями за замовчуванням
     
     Args:
         stage2_schema: JSON схема для Stage2 (опціонально)
+        start_delay_ms: Пауза між запитами в мілісекундах
         
     Returns:
         Налаштований GeminiClient
@@ -595,13 +600,15 @@ def create_gemini_client(stage2_schema: Optional[dict] = None) -> GeminiClient:
     return GeminiClient(
         stage1_model=DEFAULT_STAGE1_MODEL,
         stage2_model=DEFAULT_STAGE2_MODEL,
-        stage2_schema=stage2_schema
+        stage2_schema=stage2_schema,
+        start_delay_ms=start_delay_ms
     )
 
 
 def create_custom_gemini_client(stage1_model: str, 
                                stage2_model: str, 
-                               stage2_schema: Optional[dict] = None) -> GeminiClient:
+                               stage2_schema: Optional[dict] = None,
+                               start_delay_ms: int = DEFAULT_START_DELAY_MS) -> GeminiClient:
     """
     Створює GeminiClient з кастомними налаштуваннями
     
@@ -609,6 +616,7 @@ def create_custom_gemini_client(stage1_model: str,
         stage1_model: Модель для Stage1
         stage2_model: Модель для Stage2
         stage2_schema: JSON схема для Stage2 (опціонально)
+        start_delay_ms: Пауза між запитами в мілісекундах
         
     Returns:
         Налаштований GeminiClient
@@ -616,7 +624,8 @@ def create_custom_gemini_client(stage1_model: str,
     return GeminiClient(
         stage1_model=stage1_model,
         stage2_model=stage2_model,
-        stage2_schema=stage2_schema
+        stage2_schema=stage2_schema,
+        start_delay_ms=start_delay_ms
     )
 
 
@@ -723,12 +732,12 @@ if __name__ == "__main__":
             print(f"⚠ Could not load schema: {e}")
             schema = {}
         
-        # Створюємо клієнт
-        client = create_gemini_client(schema)
-        print(f"✓ GeminiClient created")
+        # 🆕 СТВОРЮЄМО КЛІЄНТ З КАСТОМНОЮ ПАУЗОЮ (500ms для тесту)
+        client = create_gemini_client(schema, start_delay_ms=500)
+        print(f"✓ GeminiClient created with {client.start_delay_ms}ms delay")
         
         # Тестовий сайт і промпти
-        test_uri = "https://www.shopify.com"  # 🆕 Змінено на менш відомий корпоративний сайт
+        test_uri = "https://www.shopify.com"
         stage1_prompt = "Analyze this website and provide detailed information about its content, purpose, and functionality."
         
         print(f"\n🔍 Testing website: {test_uri}")
@@ -855,6 +864,7 @@ if __name__ == "__main__":
         print(f"\n" + "=" * 60)
         print("🎯 Test completed!")
         print("📝 This test shows RAW responses from Gemini API before any processing")
+        print(f"⏱️  Used custom delay: {client.start_delay_ms}ms (configurable)")
     
     async def main_test():
         """Головна функція тестування"""
