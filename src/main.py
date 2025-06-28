@@ -7,6 +7,7 @@ import asyncio
 import ssl
 import certifi
 import time
+import signal
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Tuple, Optional, List, Union
@@ -30,12 +31,13 @@ from urllib.parse import urlparse, urlunparse
 import ipaddress
 import phonenumbers
 
+from config import ConfigManager
 from prompts.stage1_prompt_generator import generate_stage1_prompt
 from prompts.stage2_system_prompt_generator import generate_system_prompt
 from utils.proxy_config import ProxyConfig
 from utils.gemini_client import GeminiClient, create_gemini_client
 from utils.mongo_operations import (
-    get_domain_for_analysis, finalize_api_key_usage,
+    get_domain_for_analysis, finalize_api_key_usage, get_api_key_and_proxy,
     revert_domain_status, set_domain_error_status, get_domain_segmentation_info,
     save_contact_information, save_gemini_results, save_gemini_results_with_validation_failed,
     update_api_key_ip, needs_ip_refresh
@@ -54,57 +56,18 @@ from utils.network_error_classifier import (
     ErrorType, ErrorDetails, classify_exception, is_proxy_error
 )
 
-CONFIG_DIR = Path("config")
-LOG_DIR = Path("logs")
-MONGO_CONFIG_PATH = CONFIG_DIR / "mongo_config.json"
-STAGE2_SCHEMA_PATH = CONFIG_DIR / "stage2_schema.json"
-CONTROL_FILE_PATH = CONFIG_DIR / "script_control.json"
+# ==================== ГЛОБАЛЬНІ ЗМІННІ ====================
 
+LOG_DIR = Path("logs")
 MAX_STAGE2_RETRIES = 5
 
-def load_mongo_config() -> dict:
-    try:
-        with MONGO_CONFIG_PATH.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        raise FileNotFoundError(f"MongoDB configuration file not found at {MONGO_CONFIG_PATH}")
-    except json.JSONDecodeError:
-        raise ValueError(f"Invalid JSON in MongoDB configuration file at {MONGO_CONFIG_PATH}")
+# Глобальний event для graceful shutdown
+shutdown_event = asyncio.Event()
 
-def load_stage2_schema() -> dict:
-    try:
-        with STAGE2_SCHEMA_PATH.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Stage2 schema file not found at {STAGE2_SCHEMA_PATH}")
-    except json.JSONDecodeError:
-        raise ValueError(f"Invalid JSON in Stage2 schema file at {STAGE2_SCHEMA_PATH}")
-
-def load_script_control() -> dict:
-    try:
-        with CONTROL_FILE_PATH.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        default_config = {
-            "enabled": True,
-            "workers": {"concurrent_workers": 40},
-            "timing": {"start_delay_ms": 700, "api_key_wait_time": 60, "domain_wait_time": 60},
-            "stage_timings": {
-                "stage1": {"model": "gemini-2.5-flash", "cooldown_minutes": 3, "api_provider": "gemini"},
-                "stage2": {"model": "gemini-2.0-flash", "cooldown_minutes": 2, "api_provider": "gemini"}
-            }
-        }
-        
-        CONTROL_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with CONTROL_FILE_PATH.open("w", encoding="utf-8") as f:
-            json.dump(default_config, f, indent=2)
-        return default_config
-    except json.JSONDecodeError:
-        raise ValueError(f"Invalid JSON in script control file at {CONTROL_FILE_PATH}")
-
-MONGO_CONFIG = load_mongo_config()
-STAGE2_SCHEMA = load_stage2_schema()
-SCRIPT_CONFIG = load_script_control()
+# Отримуємо всі конфігурації через ConfigManager
+MONGO_CONFIG = ConfigManager.get_mongo_config()
+SCRIPT_CONFIG = ConfigManager.get_script_config()
+STAGE2_SCHEMA = ConfigManager.get_stage2_schema()
 
 API_DB_URI = MONGO_CONFIG["databases"]["main_db"]["uri"]
 CLIENT_PARAMS = MONGO_CONFIG["client_params"]
@@ -113,12 +76,12 @@ CONCURRENT_WORKERS = SCRIPT_CONFIG["workers"]["concurrent_workers"]
 START_DELAY_MS = SCRIPT_CONFIG["timing"]["start_delay_ms"]
 API_KEY_WAIT_TIME = SCRIPT_CONFIG["timing"]["api_key_wait_time"]
 DOMAIN_WAIT_TIME = SCRIPT_CONFIG["timing"]["domain_wait_time"]
+MAX_CONCURRENT_STARTS = ConfigManager.get_max_concurrent_starts()
 STAGE1_MODEL = SCRIPT_CONFIG["stage_timings"]["stage1"]["model"]
 STAGE2_MODEL = SCRIPT_CONFIG["stage_timings"]["stage2"]["model"]
 STAGE2_RETRY_MODEL = SCRIPT_CONFIG["stage_timings"]["stage2"].get("retry_model")
 
 WORKER_STARTUP_DELAY_SECONDS = 0
-MAX_CONCURRENT_STARTS = 1
 CONNECT_TIMEOUT = 6
 SOCK_CONNECT_TIMEOUT = 6
 SOCK_READ_TIMEOUT = 240
@@ -140,6 +103,8 @@ CONNECTION_ERRORS = (
     ClientSSLError
 )
 
+# ==================== ЛОГУВАННЯ ====================
+
 all_loggers = setup_all_loggers()
 logger = all_loggers['system_errors']
 success_timing_logger = all_loggers['success_timing']
@@ -156,6 +121,8 @@ ip_usage_logger = all_loggers['ip_usage']
 revert_reasons_logger = all_loggers['revert_reasons']
 short_response_debug_logger = all_loggers['short_response_debug']
 segmentation_validation_logger = all_loggers['segmentation_validation']
+
+# ==================== ДОПОМІЖНІ ФУНКЦІЇ ====================
 
 def log_success_timing_wrapper(worker_id: int, stage: str, api_key: str, domain_full: str, response_time: float):
     log_success_timing(worker_id, stage, api_key, domain_full, response_time, success_timing_logger)
@@ -181,88 +148,37 @@ def log_proxy_error_wrapper(worker_id: int, stage: str, proxy_config, domain_ful
 def get_key_suffix(api_key: str) -> str:
     return f"...{api_key[-4:]}" if len(api_key) >= 4 else "***"
 
-def is_script_enabled() -> bool:
-    try:
-        current_config = load_script_control()
-        return current_config.get("enabled", True)
-    except Exception as e:
-        logger.error(f"Error reading control file: {e}")
-        return True
-
-def clear_logs():
-    try:
-        if LOG_DIR.exists():
-            for log_file in LOG_DIR.glob("*.log*"):
-                try:
-                    log_file.unlink()
-                except Exception:
-                    pass
-    except Exception:
-        pass
-
-clear_logs()
-
-async def get_api_key_and_proxy(mongo_client: AsyncIOMotorClient, stage: str = "stage1") -> Tuple[str, ProxyConfig, str, dict]:
-    stage_config = SCRIPT_CONFIG["stage_timings"].get(stage, SCRIPT_CONFIG["stage_timings"]["stage1"])
-    cooldown_minutes = stage_config["cooldown_minutes"]
-    api_provider = stage_config["api_provider"]
+def setup_signal_handlers():
+    """Налаштовує обробники сигналів для graceful shutdown"""
+    def signal_handler(signum, frame):
+        print(f"\n🛑 Received signal {signum}, initiating graceful shutdown...")
+        shutdown_event.set()
     
-    while True:
-        current_time = datetime.now(timezone.utc)
-        cooldown_ago = current_time - timedelta(minutes=cooldown_minutes)
-        
-        api_keys_collection = mongo_client["api"]["data"]
-        
-        api_key_record = await api_keys_collection.find_one_and_update(
-            {
-                "api_provider": api_provider,
-                "api_status": "active",
-                "api_last_used_date": {"$lt": cooldown_ago},
-                "proxy_ip": {"$ne": None, "$ne": ""}
-            },
-            {
-                "$set": {"api_last_used_date": current_time}
-            },
-            return_document=ReturnDocument.AFTER
-        )
-        
-        if not api_key_record:
-            if not hasattr(get_api_key_and_proxy, 'wait_count'):
-                get_api_key_and_proxy.wait_count = 0
-            get_api_key_and_proxy.wait_count += 1
-            
-            if get_api_key_and_proxy.wait_count % 10 == 0:
-                logger.warning(f"No available {api_provider} API keys for {stage} (cooldown: {cooldown_minutes}min), waiting... (attempt {get_api_key_and_proxy.wait_count})")
-            await asyncio.sleep(API_KEY_WAIT_TIME)
-            continue
-        
+    # Реєструємо обробники для різних сигналів
+    signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
+    signal.signal(signal.SIGTERM, signal_handler)  # Термінація
+    
+    # SIGUSR1 для graceful restart (тільки на Unix)
+    try:
+        signal.signal(signal.SIGUSR1, signal_handler)
+    except AttributeError:
+        pass  # Windows не підтримує SIGUSR1
+
+async def check_shutdown_periodically():
+    """Періодично перевіряє конфігурацію і встановлює shutdown_event якщо треба"""
+    while not shutdown_event.is_set():
         try:
-            api_key = api_key_record["api_key"]
-            key_record_id = str(api_key_record["_id"])
-            
-            protocol = api_key_record.get("proxy_protocol", "").strip().lower()
-            ip = api_key_record.get("proxy_ip", "").strip()
-            port = api_key_record.get("proxy_port")
-            username = api_key_record.get("proxy_username", "").strip() or None
-            password = api_key_record.get("proxy_password", "").strip() or None
-            
-            if not protocol or not ip or not port:
-                logger.error(f"Invalid proxy data in API key record: protocol={protocol}, ip={ip}, port={port}")
-                continue
-            
-            proxy_config = ProxyConfig(
-                protocol=protocol,
-                ip=ip,
-                port=int(port),
-                username=username,
-                password=password
-            )
-            
-            return api_key, proxy_config, key_record_id, api_key_record
-            
-        except (ValueError, TypeError, KeyError) as e:
-            logger.error(f"Error parsing API key record: {e}")
-            continue
+            # Перевіряємо enabled статус кожні 30 секунд
+            await asyncio.sleep(30)
+            if not ConfigManager.is_script_enabled():
+                print("🛑 Script disabled in config, initiating graceful shutdown...")
+                shutdown_event.set()
+                break
+        except Exception as e:
+            logger.error(f"Error checking script status: {e}")
+            await asyncio.sleep(5)
+
+# ==================== IP REFRESH ФУНКЦІЯ ====================
 
 async def get_current_ip_with_retry(proxy_config: ProxyConfig, mongo_client: AsyncIOMotorClient, key_id: str, max_attempts: int = 4) -> Tuple[ProxyConfig, str]:
     current_proxy = proxy_config
@@ -305,6 +221,8 @@ async def get_current_ip_with_retry(proxy_config: ProxyConfig, mongo_client: Asy
             
     return current_proxy, ""
 
+# ==================== ОБРОБКА РЕЗУЛЬТАТІВ ====================
+
 async def handle_stage_result(mongo_client, worker_id, stage_name, api_key, domain_full, proxy_config, key_record_id, result):
     status_code = result.get("status_code")
     response_time = result.get("response_time", 0)
@@ -342,6 +260,8 @@ async def handle_stage_result(mongo_client, worker_id, stage_name, api_key, doma
     freeze_minutes_param = None
     await finalize_api_key_usage(mongo_client, key_record_id, status_code, is_proxy_err, proxy_config, freeze_minutes_param)
 
+# ==================== ВОРКЕР ====================
+
 async def worker(worker_id: int):
     mongo_client = AsyncIOMotorClient(API_DB_URI, **CLIENT_PARAMS)
     
@@ -352,10 +272,7 @@ async def worker(worker_id: int):
     )
     
     try:
-        while True:
-            if not is_script_enabled():
-                break
-                
+        while not shutdown_event.is_set():
             try:
                 target_uri, domain_full, domain_id = await get_domain_for_analysis(mongo_client)
                 
@@ -531,39 +448,71 @@ async def worker(worker_id: int):
     finally:
         mongo_client.close()
 
+# ==================== ОСНОВНА ФУНКЦІЯ ====================
+
 async def main():
+    # Налаштовуємо signal handlers для graceful shutdown
+    setup_signal_handlers()
+    
     workers = []
+    config_checker = None
+    
     try:
-        current_workers = SCRIPT_CONFIG["workers"]["concurrent_workers"]
-        stage1_model = SCRIPT_CONFIG["stage_timings"]["stage1"]["model"]
-        stage2_model = SCRIPT_CONFIG["stage_timings"]["stage2"]["model"]
-        stage2_retry_model = SCRIPT_CONFIG["stage_timings"]["stage2"].get("retry_model")
-        stage1_cooldown = SCRIPT_CONFIG["stage_timings"]["stage1"]["cooldown_minutes"]
-        stage2_cooldown = SCRIPT_CONFIG["stage_timings"]["stage2"]["cooldown_minutes"]
+        # Отримуємо конфігурацію через ConfigManager
+        config_summary = ConfigManager.get_config_summary()
+        
+        current_workers = config_summary["concurrent_workers"]
+        stage1_model = config_summary["stage1_model"]
+        stage2_model = config_summary["stage2_model"]
+        stage2_retry_model = config_summary.get("stage2_retry_model")
+        stage1_cooldown = config_summary["stage1_cooldown"]
+        stage2_cooldown = config_summary["stage2_cooldown"]
+        max_concurrent_starts = ConfigManager.get_max_concurrent_starts()
         
         print(f"🚀 Starting {current_workers} workers...")
         print(f"🧪 Model configuration: Stage1={stage1_model} ({stage1_cooldown}min) | Stage2={stage2_model} ({stage2_cooldown}min)")
         if stage2_retry_model:
             print(f"🔄 Retry model: {stage2_retry_model} (used for Stage2 retries)")
-        print(f"⏱️  Request interval: {START_DELAY_MS}ms between requests")        
+        print(f"⏱️  Request interval: {START_DELAY_MS}ms between requests")
+        
+        # Стартуємо задачу для періодичної перевірки конфігурації
+        config_checker = asyncio.create_task(check_shutdown_periodically())
+        
+        # Створюємо воркери
         workers = [
             asyncio.create_task(worker(worker_id))
             for worker_id in range(current_workers)
         ]
         
-        await asyncio.gather(*workers, return_exceptions=True)
+        # Чекаємо завершення воркерів або shutdown event
+        await asyncio.gather(*workers, config_checker, return_exceptions=True)
         
     except KeyboardInterrupt:
-        logger.warning("Received KeyboardInterrupt, shutting down...")
+        print("\n🛑 KeyboardInterrupt received, initiating graceful shutdown...")
+        shutdown_event.set()
         
+    except Exception as e:
+        logger.error(f"Main function error: {e}", exc_info=True)
+        shutdown_event.set()
+        
+    finally:
+        # Graceful shutdown всіх задач
+        print("🔄 Shutting down workers gracefully...")
+        
+        # Скасовуємо config checker
+        if config_checker and not config_checker.done():
+            config_checker.cancel()
+            
+        # Скасовуємо всі воркери
         for task in workers:
             if not task.done():
                 task.cancel()
         
-        await asyncio.gather(*workers, return_exceptions=True)
-        
-    except Exception as e:
-        logger.error(f"Main function error: {e}", exc_info=True)
+        # Чекаємо завершення всіх задач
+        if workers or config_checker:
+            await asyncio.gather(*workers, config_checker, return_exceptions=True)
+            
+        print("✅ All workers stopped gracefully")
 
 if __name__ == "__main__":
     asyncio.run(main())

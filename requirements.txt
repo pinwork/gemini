@@ -4,3 +4,4 @@ motor==3.7.0
 pymongo==4.12.1
 certifi==2025.1.31
 phonenumbers==9.0.4
+tenacity==9.1.2

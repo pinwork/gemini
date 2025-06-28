@@ -8,7 +8,8 @@
   "timing": {
     "start_delay_ms": 700,
     "api_key_wait_time": 60,
-    "domain_wait_time": 60
+    "domain_wait_time": 60,
+    "max_concurrent_starts": 1
   },
   
   "stage_timings": {

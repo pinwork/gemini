@@ -20,16 +20,21 @@ from aiohttp import (
 try:
     from .proxy_config import ProxyConfig
     from .network_error_classifier import classify_exception
+    from ..config import ConfigManager
 except ImportError:
     import sys
     from pathlib import Path
     sys.path.append(str(Path(__file__).parent))
     from proxy_config import ProxyConfig
     from network_error_classifier import classify_exception
+    # Для standalone тестування
+    try:
+        from config import ConfigManager
+    except ImportError:
+        ConfigManager = None
 
 SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
-MAX_CONCURRENT_STARTS = 1
 CONNECT_TIMEOUT = 6
 SOCK_CONNECT_TIMEOUT = 6
 SOCK_READ_TIMEOUT = 240
@@ -53,6 +58,16 @@ class GeminiAPIError(Exception):
         self.response_data = response_data
 
 
+def get_max_concurrent_starts() -> int:
+    """Отримує MAX_CONCURRENT_STARTS з конфігурації або використовує дефолт"""
+    if ConfigManager:
+        try:
+            return ConfigManager.get_max_concurrent_starts()
+        except Exception:
+            pass
+    return 1  # Дефолтне значення
+
+
 class GeminiClient:
     
     def __init__(self, 
@@ -67,10 +82,13 @@ class GeminiClient:
         self.stage2_schema = stage2_schema or {}
         self.start_delay_ms = start_delay_ms
         
+        # Отримуємо MAX_CONCURRENT_STARTS з конфігурації
+        max_concurrent_starts = get_max_concurrent_starts()
+        
         if _stage_timing["stage1"]["semaphore"] is None:
-            _stage_timing["stage1"]["semaphore"] = asyncio.Semaphore(MAX_CONCURRENT_STARTS)
+            _stage_timing["stage1"]["semaphore"] = asyncio.Semaphore(max_concurrent_starts)
         if _stage_timing["stage2"]["semaphore"] is None:
-            _stage_timing["stage2"]["semaphore"] = asyncio.Semaphore(MAX_CONCURRENT_STARTS)
+            _stage_timing["stage2"]["semaphore"] = asyncio.Semaphore(max_concurrent_starts)
     
     def format_api_error(self, raw_response: str) -> str:
         try:
@@ -423,6 +441,8 @@ class GeminiClient:
             return {"success": False, "message": f"Connection test failed: {str(e)}"}
     
     def get_usage_stats(self) -> dict:
+        max_concurrent_starts = get_max_concurrent_starts()
+        
         return {
             "stage1_model": self.stage1_model,
             "stage2_model": self.stage2_model,
@@ -433,7 +453,7 @@ class GeminiClient:
             "stage2_features": ["JSON_schema", "systemInstruction"],
             "timing_intervals": {
                 "start_delay_ms": self.start_delay_ms,
-                "max_concurrent": MAX_CONCURRENT_STARTS
+                "max_concurrent_starts": max_concurrent_starts
             }
         }
 
@@ -556,6 +576,10 @@ if __name__ == "__main__":
         client = create_gemini_client(schema, start_delay_ms=500)
         print(f"✓ GeminiClient created with {client.start_delay_ms}ms delay")
         
+        # Показуємо конфігурований MAX_CONCURRENT_STARTS
+        max_concurrent = get_max_concurrent_starts()
+        print(f"🔧 Max concurrent starts: {max_concurrent} (from config)")
+        
         test_domain = "shopify.com"
         stage1_prompt = "Analyze this website and provide detailed information about its content, purpose, and functionality."
         
@@ -676,6 +700,7 @@ if __name__ == "__main__":
         print("🎯 Test completed!")
         print("📝 This test shows RAW responses from Gemini API before any processing")
         print(f"⏱️  Used custom delay: {client.start_delay_ms}ms (configurable)")
+        print(f"🔧 Max concurrent starts: {max_concurrent} (configurable)")
     
     async def main_test():
         if len(sys.argv) == 1:

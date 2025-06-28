@@ -4,7 +4,6 @@
 import json
 import asyncio
 import logging
-import inspect
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Tuple, Optional, Dict
@@ -19,57 +18,18 @@ from pymongo.errors import (
     OperationFailure
 )
 from bson import ObjectId
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 RETRY_DELAY = 10
 
-def _retry_forever(coro):
-    async def wrapper(*args, **kwargs):
-        logger = logging.getLogger("mongo_operations")
-        retry_count = 0
-        
-        while True:
-            try:
-                return await coro(*args, **kwargs)
-            except (
-                AutoReconnect,
-                NetworkTimeout,
-                ServerSelectionTimeoutError,
-                ConnectionFailure,
-                OperationFailure,
-            ) as e:
-                retry_count += 1
-                
-                error_type = type(e).__name__
-                error_str = str(e)
-                
-                if "getaddrinfo failed" in error_str:
-                    short_msg = "DNS resolution failed - check MongoDB host config"
-                elif "authentication failed" in error_str.lower():
-                    short_msg = "MongoDB authentication failed"
-                elif "timeout" in error_str.lower():
-                    short_msg = "MongoDB connection timeout"
-                else:
-                    short_msg = f"MongoDB connection issue ({error_type})"
-                
-                if retry_count == 1:
-                    logger.warning(f"🔄 {short_msg}, retrying every {RETRY_DELAY}s...")
-                elif retry_count % 6 == 0:
-                    logger.warning(f"🔄 Still retrying MongoDB connection (attempt #{retry_count})")
-                
-                await asyncio.sleep(RETRY_DELAY)
-                
-            except Exception:
-                raise
-    return wrapper
-
-for _cls in (
-    AsyncIOMotorClient,
-    AsyncIOMotorClient.__bases__[0],
-    AsyncIOMotorClient.__bases__[0].__bases__[0],
-):
-    for _name, _attr in _cls.__dict__.items():
-        if inspect.iscoroutinefunction(_attr):
-            setattr(_cls, _name, _retry_forever(_attr))
+# Список MongoDB помилок для retry
+MONGODB_ERRORS = (
+    AutoReconnect,
+    NetworkTimeout,
+    ServerSelectionTimeoutError,
+    ConnectionFailure,
+    OperationFailure,
+)
 
 try:
     from .proxy_config import ProxyConfig
@@ -78,6 +38,8 @@ try:
         validate_segments_language, clean_gemini_results, validate_url_field,
         validate_segments_full
     )
+    # Імпортуємо ConfigManager з батьківського пакету
+    from ..config import ConfigManager
 except ImportError:
     import sys
     sys.path.append(str(Path(__file__).parent.parent))
@@ -87,45 +49,26 @@ except ImportError:
         validate_segments_language, clean_gemini_results, validate_url_field,
         validate_segments_full
     )
+    from config import ConfigManager
 
 API_KEY_WAIT_TIME = 60
 DOMAIN_WAIT_TIME = 60
 
 logger = logging.getLogger("mongo_operations")
 
-def _load_mongo_config() -> dict:
-    config_path = Path(__file__).parent.parent.parent / "config" / "mongo_config.json"
-    try:
-        with config_path.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        raise FileNotFoundError(f"MongoDB configuration file not found at {config_path}")
-    except json.JSONDecodeError:
-        raise ValueError(f"Invalid JSON in MongoDB configuration file at {config_path}")
+# ==================== ОТРИМАННЯ КОНФІГУРАЦІЙ ЧЕРЕЗ ConfigManager ====================
 
-def _load_script_control() -> dict:
-    config_path = Path(__file__).parent.parent.parent / "config" / "script_control.json"
-    try:
-        with config_path.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {
-            "stage_timings": {
-                "stage1": {"cooldown_minutes": 3, "api_provider": "gemini"},
-                "stage2": {"cooldown_minutes": 2, "api_provider": "gemini"}
-            }
-        }
-    except json.JSONDecodeError:
-        logger.error("Invalid JSON in script control file, using defaults")
-        return {
-            "stage_timings": {
-                "stage1": {"cooldown_minutes": 3, "api_provider": "gemini"},
-                "stage2": {"cooldown_minutes": 2, "api_provider": "gemini"}
-            }
-        }
+def get_mongo_config() -> dict:
+    """Отримує MongoDB конфігурацію через ConfigManager"""
+    return ConfigManager.get_mongo_config()
 
-MONGO_CONFIG = _load_mongo_config()
-SCRIPT_CONFIG = _load_script_control()
+def get_script_config() -> dict:
+    """Отримує конфігурацію скрипта через ConfigManager"""
+    return ConfigManager.get_script_config()
+
+# Глобальні змінні тепер отримуються через ConfigManager
+MONGO_CONFIG = get_mongo_config()
+SCRIPT_CONFIG = get_script_config()
 
 def get_timestamp_ms() -> int:
     return int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -134,6 +77,12 @@ def needs_ip_refresh(key_rec: dict) -> bool:
     ip = key_rec.get("current_ip", "")
     return not ("." in ip or ":" in ip)
 
+@retry(
+    retry=retry_if_exception_type(MONGODB_ERRORS),
+    stop=stop_after_attempt(10),
+    wait=wait_exponential(multiplier=1, min=1, max=RETRY_DELAY),
+    reraise=True
+)
 async def get_domain_for_analysis(mongo_client: AsyncIOMotorClient) -> Tuple[str, str, str]:
     db_name = MONGO_CONFIG["databases"]["main_db"]["name"]
     collection_name = MONGO_CONFIG["databases"]["main_db"]["collections"]["domain_main"]
@@ -163,10 +112,16 @@ async def get_domain_for_analysis(mongo_client: AsyncIOMotorClient) -> Tuple[str
         
         return domain_record["target_uri"], domain_record["domain_full"], str(domain_record["_id"])
 
+@retry(
+    retry=retry_if_exception_type(MONGODB_ERRORS),
+    stop=stop_after_attempt(10), 
+    wait=wait_exponential(multiplier=1, min=1, max=RETRY_DELAY),
+    reraise=True
+)
 async def get_api_key_and_proxy(mongo_client: AsyncIOMotorClient, stage: str = "stage1") -> Tuple[str, ProxyConfig, str, dict]:
-    stage_config = SCRIPT_CONFIG["stage_timings"].get(stage, SCRIPT_CONFIG["stage_timings"]["stage1"])
-    cooldown_minutes = stage_config["cooldown_minutes"]
-    api_provider = stage_config["api_provider"]
+    # Отримуємо конфігурацію через ConfigManager
+    cooldown_minutes = ConfigManager.get_stage_cooldown(stage)
+    api_provider = ConfigManager.get_script_config()["stage_timings"].get(stage, {}).get("api_provider", "gemini")
     
     api_db_name = MONGO_CONFIG["databases"]["api_db"]["name"]
     api_collection_name = MONGO_CONFIG["databases"]["api_db"]["collections"]["keys"]
@@ -228,6 +183,12 @@ async def get_api_key_and_proxy(mongo_client: AsyncIOMotorClient, stage: str = "
             logger.error(f"Error parsing API key record: {e}")
             continue
 
+@retry(
+    retry=retry_if_exception_type(MONGODB_ERRORS),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=1, max=RETRY_DELAY),
+    reraise=True
+)
 async def finalize_api_key_usage(mongo_client: AsyncIOMotorClient, key_record_id: str, 
                                 status_code: Optional[int] = None, is_proxy_error: bool = False, 
                                 working_proxy: Optional[ProxyConfig] = None, 
@@ -269,6 +230,12 @@ async def finalize_api_key_usage(mongo_client: AsyncIOMotorClient, key_record_id
     except Exception as e:
         logger.error(f"Error finalizing API key usage: {e}")
 
+@retry(
+    retry=retry_if_exception_type(MONGODB_ERRORS),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=1, max=RETRY_DELAY),
+    reraise=True
+)
 async def revert_domain_status(mongo_client: AsyncIOMotorClient, domain_id: str, 
                               reason: str = "", revert_logger: Optional[logging.Logger] = None) -> None:
     try:
@@ -297,6 +264,12 @@ async def revert_domain_status(mongo_client: AsyncIOMotorClient, domain_id: str,
     except Exception as e:
         logger.error(f"Error reverting domain status: {e}")
 
+@retry(
+    retry=retry_if_exception_type(MONGODB_ERRORS),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=1, max=RETRY_DELAY),
+    reraise=True
+)
 async def set_domain_error_status(mongo_client: AsyncIOMotorClient, domain_id: str, error_reason: str = "") -> None:
     try:
         db_name = MONGO_CONFIG["databases"]["main_db"]["name"]
@@ -325,6 +298,12 @@ async def set_domain_error_status(mongo_client: AsyncIOMotorClient, domain_id: s
     except Exception as e:
         logger.error(f"Error setting domain error status: {e}")
 
+@retry(
+    retry=retry_if_exception_type(MONGODB_ERRORS),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=1, max=RETRY_DELAY),
+    reraise=True
+)
 async def get_domain_segmentation_info(mongo_client: AsyncIOMotorClient, domain_full: str) -> str:
     try:
         db_name = MONGO_CONFIG["databases"]["main_db"]["name"]
@@ -345,6 +324,12 @@ async def get_domain_segmentation_info(mongo_client: AsyncIOMotorClient, domain_
         logger.error(f"Error getting domain segmentation info for {domain_full}: {e}")
         return ""
 
+@retry(
+    retry=retry_if_exception_type(MONGODB_ERRORS),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=1, max=RETRY_DELAY),
+    reraise=True
+)
 async def save_contact_information(mongo_client: AsyncIOMotorClient, domain_full: str, gemini_result: dict) -> None:
     try:
         db_name = MONGO_CONFIG["databases"]["main_db"]["name"]
@@ -427,6 +412,12 @@ async def save_contact_information(mongo_client: AsyncIOMotorClient, domain_full
 def _segments_norm(s: str) -> str:
     return s.replace(' ', '').lower() if s else ''
 
+@retry(
+    retry=retry_if_exception_type(MONGODB_ERRORS),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=1, max=RETRY_DELAY),
+    reraise=True
+)
 async def save_gemini_results(mongo_client: AsyncIOMotorClient, domain_full: str, 
                              gemini_result: dict, grounding_status: str, domain_id: str, 
                              segment_combined: str = "", revert_logger: Optional[logging.Logger] = None,
@@ -609,6 +600,12 @@ async def save_gemini_results_with_validation_failed(mongo_client: AsyncIOMotorC
         segmentation_logger=None
     )
 
+@retry(
+    retry=retry_if_exception_type(MONGODB_ERRORS),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=1, max=RETRY_DELAY),
+    reraise=True
+)
 async def update_api_key_ip(mongo_client: AsyncIOMotorClient, key_id: str, ip: str, 
                            ip_logger: Optional[logging.Logger] = None) -> bool:
     try:
@@ -631,51 +628,52 @@ async def update_api_key_ip(mongo_client: AsyncIOMotorClient, key_id: str, ip: s
         logger.warning(f"Duplicate IP {ip} for key {key_id}")
         return False
 
-async def retry_mongo_operation(operation, *args, **kwargs):
-    while True:
-        try:
-            return await operation(*args, **kwargs)
-        except (
-            AutoReconnect,
-            NetworkTimeout,
-            ServerSelectionTimeoutError,
-            ConnectionFailure,
-            OperationFailure,
-        ) as e:
-            logger.warning(f"MongoDB operation failed: {e}. Retrying in {RETRY_DELAY} seconds...")
-            await asyncio.sleep(RETRY_DELAY)
-        except Exception:
-            raise
-
 if __name__ == "__main__":
     print("=== MongoDB Operations Module Test ===\n")
     
-    print("✅ MongoDB Operations Module loaded successfully with GLOBAL RETRY PATCH + DYNAMIC STAGE COOLDOWNS")
-    print(f"📁 Config loaded from: {MONGO_CONFIG}")
-    print(f"🏠 Main DB: {MONGO_CONFIG['databases']['main_db']['name']}")
-    print(f"🔑 API DB: {MONGO_CONFIG['databases']['api_db']['name']}")
-    print(f"🔄 Retry delay: {RETRY_DELAY} seconds")
+    print("✅ MongoDB Operations Module loaded successfully with CENTRALIZED CONFIG MANAGEMENT")
+    print(f"📁 Using ConfigManager for all configurations")
     
-    print(f"\n⏱️  Stage Cooldowns:")
-    for stage, config in SCRIPT_CONFIG["stage_timings"].items():
-        cooldown = config["cooldown_minutes"]
-        provider = config["api_provider"]
-        print(f"   📊 {stage}: {cooldown} minutes ({provider} keys)")
+    try:
+        config_summary = ConfigManager.get_config_summary()
+        print(f"🏠 Main DB: {MONGO_CONFIG['databases']['main_db']['name']}")
+        print(f"🔑 API DB: {MONGO_CONFIG['databases']['api_db']['name']}")
+        print(f"🔄 Retry delay: {RETRY_DELAY} seconds")
+        
+        print(f"\n⏱️  Stage Cooldowns (via ConfigManager):")
+        for stage in ["stage1", "stage2"]:
+            cooldown = ConfigManager.get_stage_cooldown(stage)
+            model = ConfigManager.get_stage_model(stage)
+            print(f"   📊 {stage}: {cooldown} minutes ({model})")
+        
+        print(f"\n📊 Config Summary:")
+        for key, value in config_summary.items():
+            print(f"   🔧 {key}: {value}")
+        
+    except Exception as e:
+        print(f"❌ Config loading failed: {e}")
     
-    print("\n📋 Available Functions (ALL with automatic retries + stage-aware cooldowns):")
+    print("\n📋 Available Functions (ALL with automatic retries + ConfigManager integration):")
     functions = [
         "get_domain_for_analysis",
-        "get_api_key_and_proxy (now stage-aware)", 
+        "get_api_key_and_proxy (now uses ConfigManager cooldowns)", 
         "finalize_api_key_usage",
         "revert_domain_status",
         "set_domain_error_status",
         "get_domain_segmentation_info",
         "save_contact_information", 
         "save_gemini_results",
-        "save_gemini_results_with_validation_failed (🆕 UPDATED with simplified logging)",
+        "save_gemini_results_with_validation_failed",
         "update_api_key_ip",
-        "retry_mongo_operation (fallback)"
+        "retry_mongo_operation"
     ]
     
     for func in functions:
         print(f"   ✓ {func}")
+    
+    print(f"\n🔧 NEW CENTRALIZED CONFIG FUNCTIONS:")
+    print(f"   ✓ get_mongo_config() -> ConfigManager.get_mongo_config()")
+    print(f"   ✓ get_script_config() -> ConfigManager.get_script_config()")
+    print(f"   ✓ ConfigManager.get_stage_cooldown(stage)")
+    print(f"   ✓ ConfigManager.get_stage_model(stage)")
+    print(f"   ✓ ConfigManager.get_config_summary()")
