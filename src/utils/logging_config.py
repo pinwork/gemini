@@ -138,6 +138,23 @@ def configure_stage1_issues_logging() -> logging.Logger:
     return stage1_issues_logger
 
 
+def configure_stage2_retries_logging() -> logging.Logger:
+    """🆕 Конфігурує logger для retry спроб Stage2 segments_full валідації"""
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    stage2_retries_log_file = LOG_DIR / "stage2_retries.log"
+    stage2_retries_logger = logging.getLogger("stage2_retries")
+    stage2_retries_logger.handlers = []
+    stage2_retries_logger.setLevel(logging.INFO)
+    stage2_retries_logger.propagate = False
+    stage2_retries_file_handler = logging.handlers.RotatingFileHandler(
+        stage2_retries_log_file, maxBytes=10*1024*1024, backupCount=5, encoding="utf-8"
+    )
+    stage2_retries_file_handler.setLevel(logging.INFO)
+    stage2_retries_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
+    stage2_retries_logger.addHandler(stage2_retries_file_handler)
+    return stage2_retries_logger
+
+
 def configure_proxy_errors_logging() -> logging.Logger:
     """Конфігурує logger для помилок проксі"""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -288,6 +305,7 @@ def setup_all_loggers() -> Dict[str, logging.Logger]:
         'rate_limits': configure_rate_limits_logging(),
         'http_errors': configure_http_errors_logging(),
         'stage1_issues': configure_stage1_issues_logging(),
+        'stage2_retries': configure_stage2_retries_logging(),  # 🆕 НОВИЙ LOGGER
         'proxy_errors': configure_proxy_errors_logging(),
         'network_errors': configure_network_errors_logging(),
         'api_errors': configure_api_errors_logging(),
@@ -333,6 +351,14 @@ def log_stage1_issue(worker_id: int, api_key: str, target_uri: str, issue_type: 
     masked_key = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
     short_uri = target_uri[:60] + "..." if len(target_uri) > 60 else target_uri
     stage1_issues_logger.info(f"Worker-{worker_id:02d} | {issue_type} | Key: {masked_key} | {short_uri} | {details}")
+
+
+def log_stage2_retry(worker_id: int, api_key: str, target_uri: str, retry_count: int, segments_full: str, stage2_retries_logger: logging.Logger):
+    """🆕 Логує retry спробу Stage2 для segments_full валідації"""
+    masked_key = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
+    short_uri = target_uri[:60] + "..." if len(target_uri) > 60 else target_uri
+    short_segments = segments_full[:50] + "..." if len(segments_full) > 50 else segments_full
+    stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {masked_key} | {short_uri} | Invalid segments_full: '{short_segments}'")
 
 
 def log_error_details(worker_id: int, stage: str, api_key: str, target_uri: str, 
@@ -392,60 +418,24 @@ if __name__ == "__main__":
     else:
         print("   📁 Log directory will be created on first use")
     
-    # Тест 3: Тестування функцій логування
-    print(f"\n3. Testing logging functions:")
+    # Тест 3: Тестування нової функції логування
+    print(f"\n3. Testing new Stage2 retry logging function:")
     
     # Створюємо тестові дані
     test_worker_id = 1
-    test_stage = "Test"
     test_api_key = "test_key_1234567890abcdef"
     test_uri = "https://example.com/very/long/path/to/test/website"
-    test_response_time = 1.234
+    test_retry_count = 2
+    test_segments_full = "this is invalid segments full that does not match"
     
-    # Тестуємо success timing
+    # Тестуємо новий stage2 retry logger
     try:
-        log_success_timing(test_worker_id, test_stage, test_api_key, test_uri, test_response_time, loggers['success_timing'])
-        print("   ✓ log_success_timing() → SUCCESS")
+        log_stage2_retry(test_worker_id, test_api_key, test_uri, test_retry_count, test_segments_full, loggers['stage2_retries'])
+        print("   ✓ log_stage2_retry() → SUCCESS")
     except Exception as e:
-        print(f"   ✗ log_success_timing() → ERROR: {e}")
-    
-    # Тестуємо rate limit
-    try:
-        log_rate_limit(test_worker_id, test_stage, test_api_key, test_uri, 3, loggers['rate_limits'])
-        print("   ✓ log_rate_limit() → SUCCESS")
-    except Exception as e:
-        print(f"   ✗ log_rate_limit() → ERROR: {e}")
-    
-    # Тестуємо HTTP error
-    try:
-        log_http_error(test_worker_id, test_stage, test_api_key, test_uri, 404, "Not Found", loggers['http_errors'])
-        print("   ✓ log_http_error() → SUCCESS")
-    except Exception as e:
-        print(f"   ✗ log_http_error() → ERROR: {e}")
-    
-    # Тестуємо Stage1 issue
-    try:
-        log_stage1_issue(test_worker_id, test_api_key, test_uri, "TEST_ISSUE", loggers['stage1_issues'], "Test details")
-        print("   ✓ log_stage1_issue() → SUCCESS")
-    except Exception as e:
-        print(f"   ✗ log_stage1_issue() → ERROR: {e}")
-    
-    # Тест 4: Перевірка створених log записів
-    print(f"\n4. Checking created log entries:")
-    test_logs = [
-        ("success_timing.log", "Test successful timing log"),
-        ("rate_limits.log", "Test rate limit log"),
-        ("http_errors.log", "Test HTTP error log"),
-        ("stage1_issues.log", "Test Stage1 issue log")
-    ]
-    
-    for log_filename, description in test_logs:
-        log_path = LOG_DIR / log_filename
-        if log_path.exists() and log_path.stat().st_size > 0:
-            print(f"   ✓ {log_filename:25s} → {description}")
-        else:
-            print(f"   ⚠ {log_filename:25s} → File not created or empty")
+        print(f"   ✗ log_stage2_retry() → ERROR: {e}")
     
     print(f"\n=== Test completed ===")
+    print(f"🆕 NEW LOGGER: stage2_retries → logs/stage2_retries.log")
+    print(f"🆕 NEW FUNCTION: log_stage2_retry() for tracking validation retries")
     print(f"Total loggers configured: {len(loggers)}")
-    print(f"Module loaded successfully with {len([name for name in globals() if callable(globals()[name]) and not name.startswith('_')])} functions")

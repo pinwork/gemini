@@ -38,16 +38,18 @@ from utils.gemini_client import GeminiClient, create_gemini_client
 from utils.mongo_operations import (
     get_domain_for_analysis, finalize_api_key_usage,
     revert_domain_status, set_domain_error_status, get_domain_segmentation_info,
-    save_contact_information, save_gemini_results, update_api_key_ip, needs_ip_refresh
+    save_contact_information, save_gemini_results, save_gemini_results_with_validation_failed,  # 🆕 НОВИЙ ІМПОРТ
+    update_api_key_ip, needs_ip_refresh
 )
 from utils.validation_utils import (
     has_access_issues, validate_country_code, validate_email, validate_phone_e164,
     validate_segments_language, clean_gemini_results, normalize_url, validate_url_field,
-    format_summary, clean_it_prefix, validate_segments_full, clean_phone_for_validation
+    format_summary, clean_it_prefix, validate_segments_full, clean_phone_for_validation,
+    validate_segments_full_only  # 🆕 НОВИЙ ІМПОРТ ДЛЯ RETRY ЛОГІКИ
 )
 from utils.logging_config import (
     setup_all_loggers, log_success_timing, log_rate_limit, log_http_error,
-    log_stage1_issue, log_error_details, log_proxy_error
+    log_stage1_issue, log_error_details, log_proxy_error  # 🔧 ПРИБРАЛИ log_stage2_retry
 )
 from utils.network_error_classifier import (
     ErrorType, ErrorDetails, classify_exception, is_proxy_error
@@ -58,6 +60,9 @@ LOG_DIR = Path("logs")
 MONGO_CONFIG_PATH = CONFIG_DIR / "mongo_config.json"
 STAGE2_SCHEMA_PATH = CONFIG_DIR / "stage2_schema.json"
 CONTROL_FILE_PATH = CONFIG_DIR / "script_control.json"
+
+# 🆕 КОНСТАНТА ДЛЯ МАКСИМАЛЬНОЇ КІЛЬКОСТІ RETRY СПРОБ
+MAX_STAGE2_RETRIES = 5
 
 def load_mongo_config() -> dict:
     try:
@@ -149,6 +154,7 @@ success_timing_logger = all_loggers['success_timing']
 rate_limits_logger = all_loggers['rate_limits']
 http_errors_logger = all_loggers['http_errors']
 stage1_issues_logger = all_loggers['stage1_issues']
+stage2_retries_logger = all_loggers['stage2_retries']  # 🆕 НОВИЙ LOGGER
 proxy_errors_logger = all_loggers['proxy_errors']
 network_errors_logger = all_loggers['network_errors']
 api_errors_logger = all_loggers['api_errors']
@@ -366,7 +372,7 @@ async def handle_stage_result(mongo_client, worker_id, stage_name, api_key, targ
     await finalize_api_key_usage(mongo_client, key_record_id, status_code, is_proxy_err, proxy_config, freeze_minutes_param)
 
 async def worker(worker_id: int):
-    """Основна функція worker'а з використанням GeminiClient"""
+    """Основна функція worker'а з використанням GeminiClient та retry логікою для segments_full"""
     mongo_client = AsyncIOMotorClient(API_DB_URI, **CLIENT_PARAMS)
     
     # Створюємо Gemini клієнт
@@ -383,7 +389,7 @@ async def worker(worker_id: int):
                 # Get segmentation info for the domain
                 segment_combined = await get_domain_segmentation_info(mongo_client, domain_full)
                 
-                # 🆕 ПЕРЕДАЄМО STAGE ДЛЯ STAGE1
+                # ========== STAGE 1 EXECUTION ==========
                 api_key1, proxy_config1, key_record_id1, key_rec1 = await get_api_key_and_proxy(mongo_client, "stage1")
                 if needs_ip_refresh(key_rec1):
                     working_proxy1, detected_ip1 = await get_current_ip_with_retry(
@@ -459,55 +465,112 @@ async def worker(worker_id: int):
                     await revert_domain_status(mongo_client, domain_id, f"stage1_exception:{error_details.exception_class}", revert_reasons_logger)
                     continue
                 
-                # 🆕 ПЕРЕДАЄМО STAGE ДЛЯ STAGE2
-                api_key2, proxy_config2, key_record_id2, key_rec2 = await get_api_key_and_proxy(mongo_client, "stage2")
-                if needs_ip_refresh(key_rec2):
-                    working_proxy2, detected_ip2 = await get_current_ip_with_retry(
-                        proxy_config2, 
-                        mongo_client, 
-                        key_record_id2
+                # ========== 🆕 STAGE 2 RETRY LOGIC (MAX 5 ATTEMPTS) ==========
+                retry_count = 0
+                stage2_success = False
+                final_stage2_result = None
+                current_system_prompt = generate_system_prompt(segment_combined, domain_full)
+                
+                while retry_count <= MAX_STAGE2_RETRIES and not stage2_success:  # <= щоб включити 0
+                    try:
+                        # Отримуємо новий API ключ для кожної спроби Stage2
+                        api_key2, proxy_config2, key_record_id2, key_rec2 = await get_api_key_and_proxy(mongo_client, "stage2")
+                        if needs_ip_refresh(key_rec2):
+                            working_proxy2, detected_ip2 = await get_current_ip_with_retry(
+                                proxy_config2, 
+                                mongo_client, 
+                                key_record_id2
+                            )
+                        else:
+                            working_proxy2 = proxy_config2
+                            detected_ip2 = key_rec2["current_ip"]
+                        
+                        if not detected_ip2:
+                            await finalize_api_key_usage(mongo_client, key_record_id2, None, True, working_proxy2)
+                            # 🔧 ЛОГУЄМО ЯК RETRY З УНІФІКОВАНИМ ФОРМАТОМ
+                            stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {get_key_suffix(api_key2)} | {target_uri} | Proxy IP refresh failed")
+                            retry_count += 1
+                            continue
+                        
+                        # Виконуємо Stage2 запит
+                        stage2_result = await gemini_client.analyze_business(
+                            target_uri, text_response, api_key2, working_proxy2, current_system_prompt
+                        )
+                        await handle_stage_result(mongo_client, worker_id, "Stage2", api_key2, target_uri, working_proxy2, key_record_id2, stage2_result)
+                        
+                        if stage2_result.get("success") and stage2_result.get("status_code") == 200:
+                            result = stage2_result["result"]
+                            
+                            # 🔧 ВИПРАВЛЕННЯ: СПОЧАТКУ ОЧИЩАЄМО, ПОТІМ ВАЛІДУЄМО
+                            cleaned_result = clean_gemini_results(result, segment_combined, domain_full, segmentation_validation_logger)
+                            cleaned_segments_full = cleaned_result.get("segments_full", "")
+                            is_segments_valid = validate_segments_full_only(segment_combined, cleaned_segments_full, domain_full)
+                            
+                            if is_segments_valid:
+                                # ✅ ВАЛІДАЦІЯ ПРОЙШЛА - зберігаємо результат та виходимо з циклу
+                                stage2_success = True
+                                final_stage2_result = cleaned_result  # Зберігаємо ОЧИЩЕНИЙ результат
+                                
+                                # 🚫 ПРИБИРАЄМО SUCCESS ЛОГИ - логуємо тільки проблеми
+                                break
+                            else:
+                                # ❌ ВАЛІДАЦІЯ НЕ ПРОЙШЛА - логуємо retry у УНІФІКОВАНОМУ форматі
+                                original_segments_full = result.get("segments_full", "")
+                                stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {get_key_suffix(api_key2)} | {target_uri} | segments_full validation failed | Expected: '{segment_combined}' | AI original: '{original_segments_full}' | AI cleaned: '{cleaned_segments_full}'")
+                                retry_count += 1
+                                # Не робимо break - продовжуємо retry цикл
+                        else:
+                            # 🔧 ДЕТАЛЬНЕ ЛОГУВАННЯ ПРИЧИНИ НЕВДАЧІ
+                            success = stage2_result.get("success", False)
+                            status = stage2_result.get('status_code', 'None')
+                            error_msg = stage2_result.get('error', 'No error message')
+                            
+                            if status == 200 and not success:
+                                # Статус 200 але success=False - логуємо детальну причину
+                                stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {get_key_suffix(api_key2)} | {target_uri} | HTTP 200 but processing failed | Error: {error_msg}")
+                            else:
+                                # Інші помилки
+                                stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {get_key_suffix(api_key2)} | {target_uri} | HTTP {status} | Error: {error_msg}")
+                            
+                            retry_count += 1
+                            
+                    except Exception as stage2_exception:
+                        error_details = classify_exception(stage2_exception)
+                        log_error_details_wrapper(worker_id, "Stage2", api_key2, target_uri, error_details)
+                        
+                        is_proxy_err = error_details.error_type == ErrorType.PROXY
+                        await finalize_api_key_usage(mongo_client, key_record_id2, None, is_proxy_err, working_proxy2)
+                        
+                        # 🔧 ЛОГУЄМО EXCEPTION У УНІФІКОВАНОМУ ФОРМАТІ
+                        stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {get_key_suffix(api_key2)} | {target_uri} | Exception: {error_details.exception_class}")
+                        retry_count += 1
+                
+                # ========== ЗБЕРЕЖЕННЯ РЕЗУЛЬТАТІВ ==========
+                if stage2_success and final_stage2_result:
+                    # ✅ УСПІШНА ВАЛІДАЦІЯ - зберігаємо нормально
+                    await save_gemini_results(
+                        mongo_client, domain_full, target_uri, final_stage2_result, 
+                        grounding_status, domain_id, segment_combined, 
+                        revert_logger=revert_reasons_logger, 
+                        segmentation_logger=segmentation_validation_logger
                     )
                 else:
-                    working_proxy2 = proxy_config2
-                    detected_ip2 = key_rec2["current_ip"]
-                
-                if not detected_ip2:
-                    await finalize_api_key_usage(mongo_client, key_record_id2, None, True, working_proxy2)
-                    await revert_domain_status(mongo_client, domain_id, "proxy_ip_refresh_failed", revert_reasons_logger)
-                    continue
-                
-                try:
-                    # Використовуємо GeminiClient для Stage2
-                    current_system_prompt = generate_system_prompt(segment_combined, domain_full)
+                    # ❌ ВСІ RETRY ВИЧЕРПАНІ - використовуємо fallback з validation_failed
+                    if final_stage2_result is None and 'stage2_result' in locals():
+                        # Якщо взагалі не отримали результату - беремо останню спробу (може бути пустий)
+                        final_stage2_result = stage2_result.get("result", {}) if stage2_result else {}
                     
-                    stage2_result = await gemini_client.analyze_business(
-                        target_uri, text_response, api_key2, working_proxy2, current_system_prompt
+                    await save_gemini_results_with_validation_failed(
+                        mongo_client=mongo_client,
+                        domain_full=domain_full,
+                        target_uri=target_uri,
+                        gemini_result=final_stage2_result or {},
+                        grounding_status=grounding_status,
+                        domain_id=domain_id,
+                        segment_combined=segment_combined,
+                        retry_count=retry_count - 1,  # Віднімаємо 1 бо retry_count збільшувався навіть для останньої спроби
+                        stage2_retries_logger=stage2_retries_logger
                     )
-                    await handle_stage_result(mongo_client, worker_id, "Stage2", api_key2, target_uri, working_proxy2, key_record_id2, stage2_result)
-                    
-                    if stage2_result.get("success"):
-                        result = stage2_result["result"]
-                        
-                        # Check for access issues in Stage2 results - now using revert logic in save_gemini_results
-                        await save_gemini_results(
-                            mongo_client, domain_full, target_uri, result, 
-                            grounding_status, domain_id, segment_combined, 
-                            revert_logger=revert_reasons_logger, 
-                            segmentation_logger=segmentation_validation_logger
-                        )
-                        
-                    else:
-                        await revert_domain_status(mongo_client, domain_id, "stage2_request_failed", revert_reasons_logger)
-                        
-                except Exception as stage2_exception:
-                    error_details = classify_exception(stage2_exception)
-                    log_error_details_wrapper(worker_id, "Stage2", api_key2, target_uri, error_details)
-                    
-                    is_proxy_err = error_details.error_type == ErrorType.PROXY
-                    await finalize_api_key_usage(mongo_client, key_record_id2, None, is_proxy_err, working_proxy2)
-                    logger.error(f"Worker {worker_id}: Stage2 {error_details.exception_class} with {working_proxy2.connection_string}: {stage2_exception}")
-                    await revert_domain_status(mongo_client, domain_id, f"stage2_exception:{error_details.exception_class}", revert_reasons_logger)
-                    continue
                     
             except SystemExit:
                 break
@@ -531,6 +594,7 @@ async def main():
         print(f"🚀 Starting {current_workers} workers...")
         print(f"🧪 Model configuration: Stage1={stage1_model} ({stage1_cooldown}min) | Stage2={stage2_model} ({stage2_cooldown}min)")
         print(f"⏱️  Request interval: {START_DELAY_MS}ms between requests")
+        print(f"🔄 Stage2 retry logic: MAX {MAX_STAGE2_RETRIES} attempts (Retry #0 to #{MAX_STAGE2_RETRIES}) for segments_full validation")  # 🔧 УТОЧНЕНИЙ ПРИНТ
         
         workers = [
             asyncio.create_task(worker(worker_id))

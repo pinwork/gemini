@@ -741,6 +741,49 @@ async def save_gemini_results(mongo_client: AsyncIOMotorClient, domain_full: str
     except Exception as e:
         logger.error(f"Error updating domain_segmented collection for {domain_full}: {e}")
 
+
+async def save_gemini_results_with_validation_failed(mongo_client: AsyncIOMotorClient, domain_full: str, target_uri: str, 
+                                                   gemini_result: dict, grounding_status: str, domain_id: str, 
+                                                   segment_combined: str = "", retry_count: int = 0,
+                                                   stage2_retries_logger: Optional[logging.Logger] = None) -> None:
+    """
+    🆕 FALLBACK ФУНКЦІЯ: Зберігає результати з примусовим segments_full = "validation_failed"
+    Використовується коли всі retry спроби вичерпані (максимум 5 спроб)
+    
+    Args:
+        mongo_client: Клієнт MongoDB
+        domain_full: Повне ім'я домену
+        target_uri: URI цільового сайту
+        gemini_result: Результати від Gemini API (останньої спроби)
+        grounding_status: Статус grounding з Stage1
+        domain_id: ID домену
+        segment_combined: Комбінована сегментація домену
+        retry_count: Кількість retry спроб що були зроблені
+        stage2_retries_logger: Логер для retry операцій
+    """
+    # Логуємо що використовуємо fallback
+    if stage2_retries_logger:
+        stage2_retries_logger.info(f"Domain {domain_full}: MAX RETRIES EXCEEDED ({retry_count} attempts) - using validation_failed fallback")
+    else:
+        logger.warning(f"Domain {domain_full}: MAX RETRIES EXCEEDED ({retry_count} attempts) - using validation_failed fallback")
+    
+    # Примусово встановлюємо segments_full = "validation_failed"
+    gemini_result_copy = gemini_result.copy()
+    gemini_result_copy["segments_full"] = "validation_failed"
+    
+    # Зберігаємо як звичайні результати з validation_failed
+    await save_gemini_results(
+        mongo_client=mongo_client,
+        domain_full=domain_full,
+        target_uri=target_uri,
+        gemini_result=gemini_result_copy,
+        grounding_status=grounding_status,
+        domain_id=domain_id,
+        segment_combined=segment_combined,
+        revert_logger=None,  # Не хочемо revert - зберігаємо примусово
+        segmentation_logger=None  # Логування вже зроблено вище
+    )
+
 async def update_api_key_ip(mongo_client: AsyncIOMotorClient, key_id: str, ip: str, 
                            ip_logger: Optional[logging.Logger] = None) -> bool:
     """
@@ -831,9 +874,16 @@ if __name__ == "__main__":
         "get_domain_segmentation_info",
         "save_contact_information", 
         "save_gemini_results",
+        "save_gemini_results_with_validation_failed (🆕 NEW)",  # 🆕 НОВАЯ ФУНКЦИЯ
         "update_api_key_ip",
         "retry_mongo_operation (fallback)"
     ]
     
     for func in functions:
         print(f"   ✓ {func}")
+    
+    print("\n🆕 NEW FALLBACK FUNCTION:")
+    print("   📝 save_gemini_results_with_validation_failed()")
+    print("   🎯 Used when all Stage2 retry attempts fail (max 5)")
+    print("   💾 Forces segments_full = 'validation_failed' and saves to DB")
+    print("   📊 Logs retry count and reason for fallback usage")
