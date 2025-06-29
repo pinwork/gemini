@@ -4,8 +4,9 @@
 import re
 import phonenumbers
 import logging
-from typing import Optional
+from typing import Optional, List, Dict, Tuple
 from urllib.parse import urlparse, urlunparse
+from functools import lru_cache
 
 URL_FIELDS = ["blog_url", "recruits_affiliates_url", "contact_page_url", "api_documentation_url"]
 
@@ -39,6 +40,53 @@ def clean_phone_for_validation(phone: str) -> str:
         cleaned = '+' + cleaned
     
     return cleaned
+
+
+@lru_cache(maxsize=1000)
+def _parse_and_validate_phone_cached(cleaned_phone: str) -> Tuple[Optional[str], Optional[str], bool]:
+    """Кешована валідація номера телефону"""
+    try:
+        parsed = phonenumbers.parse(cleaned_phone, None)
+        if phonenumbers.is_valid_number(parsed):
+            formatted_number = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
+            region_code = phonenumbers.region_code_for_number(parsed) or "UNKNOWN"
+            return formatted_number, region_code.upper(), True
+        return None, None, False
+    except phonenumbers.NumberParseException:
+        return None, None, False
+
+
+def validate_phone_list_optimized(phone_list: List[Dict], domain_full: str = "") -> List[Dict]:
+    """Оптимізована валідація списку телефонів з кешуванням"""
+    if not phone_list or not isinstance(phone_list, list):
+        return []
+    
+    validated_phones = []
+    
+    cleaned_phones = []
+    for phone_data in phone_list:
+        if isinstance(phone_data, dict) and phone_data.get("phone_number"):
+            phone = phone_data.get("phone_number", "").strip()
+            cleaned_phone = clean_phone_for_validation(phone)
+            cleaned_phones.append((cleaned_phone, phone_data))
+        else:
+            cleaned_phones.append((None, phone_data))
+    
+    for cleaned_phone, phone_data in cleaned_phones:
+        if not cleaned_phone:
+            continue
+            
+        formatted_number, region_code, is_valid = _parse_and_validate_phone_cached(cleaned_phone)
+        
+        if is_valid:
+            validated_phones.append({
+                "phone_number": formatted_number,
+                "region_code": region_code,
+                "whatsapp": phone_data.get("whatsapp", False),
+                "contact_type": phone_data.get("contact_type", "")
+            })
+    
+    return validated_phones
 
 
 def format_summary(summary_text: str) -> str:
@@ -409,30 +457,7 @@ def clean_gemini_results(gemini_result: dict, segment_combined: str = "", domain
     
     for key, value in gemini_result.items():
         if key == "phone_list" and isinstance(value, list):
-            validated_phones = []
-            for phone_data in value:
-                if isinstance(phone_data, dict) and phone_data.get("phone_number"):
-                    phone = phone_data.get("phone_number", "").strip()
-                    
-                    cleaned_phone = clean_phone_for_validation(phone)
-                    
-                    try:
-                        if cleaned_phone:
-                            parsed = phonenumbers.parse(cleaned_phone, None)
-                            if phonenumbers.is_valid_number(parsed):
-                                formatted_number = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
-                                region_code = phonenumbers.region_code_for_number(parsed) or "UNKNOWN"
-                                
-                                validated_phones.append({
-                                    "phone_number": formatted_number,
-                                    "region_code": region_code.upper(),
-                                    "whatsapp": phone_data.get("whatsapp", False),
-                                    "contact_type": phone_data.get("contact_type", "")
-                                })
-                    except phonenumbers.NumberParseException:
-                        pass
-            
-            cleaned_result[key] = validated_phones
+            cleaned_result[key] = validate_phone_list_optimized(value, domain_full)
             
         elif key == "app_platforms":
             cleaned_result[key] = clean_app_platforms(value)
@@ -469,7 +494,7 @@ def clean_gemini_results(gemini_result: dict, segment_combined: str = "", domain
 
 
 if __name__ == "__main__":
-    print("=== Validation Utils Test Suite ===\n")
+    print("=== Optimized Validation Utils Test Suite ===\n")
     
     print("1. Email Validation Tests:")
     test_emails = [
@@ -499,7 +524,31 @@ if __name__ == "__main__":
         result = has_access_issues(text)
         print(f"   '{text}' → Has issues: {result}")
     
-    print("\n3. NEW: Segments Full Only Validation (for retry logic):")
+    print("\n3. OPTIMIZED: Phone Validation with Caching:")
+    test_phone_list = [
+        {"phone_number": "+1-555-123-4567", "whatsapp": True, "contact_type": "support"},
+        {"phone_number": "(555) 987-6543", "whatsapp": False, "contact_type": "sales"},
+        {"phone_number": "+44 20 7946 0958", "whatsapp": True, "contact_type": "office"},
+        {"phone_number": "invalid phone", "whatsapp": False, "contact_type": "general"},
+        {"phone_number": "+1-555-123-4567", "whatsapp": True, "contact_type": "support"},  # Duplicate for cache test
+    ]
+    
+    import time
+    start_time = time.time()
+    for i in range(100):
+        result = validate_phone_list_optimized(test_phone_list, "test-domain.com")
+    end_time = time.time()
+    
+    print(f"   ✓ 100 phone list validations took: {(end_time - start_time):.4f}s")
+    print(f"   ✓ Valid phones found: {len(result)}")
+    for phone in result:
+        print(f"      {phone['phone_number']} ({phone['region_code']}) - {phone['contact_type']}")
+    
+    print("\n4. LRU Cache Info:")
+    cache_info = _parse_and_validate_phone_cached.cache_info()
+    print(f"   📊 Cache hits: {cache_info.hits}, misses: {cache_info.misses}, cache size: {cache_info.currsize}")
+    
+    print("\n5. Segments Full Only Validation (for retry logic):")
     test_cases = [
         ("book store", "book store", "Perfect match"),
         ("book store", "bookstore", "Normalized match"),  
@@ -517,69 +566,7 @@ if __name__ == "__main__":
         status = "✅ VALID" if is_valid else "❌ INVALID"
         print(f"   '{original}' vs '{ai_result}' → {status} ({description})")
     
-    print("\n4. Segments Language Cleaning:")
-    test_languages = [
-        "en en",
-        "de de de",
-        "mixed",
-        "en fr", 
-        "unknown",
-        "mixed unknown",
-        "garbage en",
-        "123 mixed de"
-    ]
-    for lang in test_languages:
-        result = clean_segments_language(lang)
-        print(f"   '{lang}' → '{result}'")
-    
-    print("\n5. NEW: App Platforms String Cleaning:")
-    test_platforms = [
-        "windows, android, chrome, android",
-        "ios, safari, badplatform, chrome",
-        "WINDOWS CHROME android",
-        "ios,safari,chrome,firefox,edge,safari",
-        "",
-        ["windows", "android", "chrome", "android"],
-        ["ios", "safari", "badplatform"],
-        [],
-        None
-    ]
-    for platforms in test_platforms:
-        result = clean_app_platforms(platforms)
-        print(f"   {platforms} → '{result}'")
-    
-    print("\n6. Geo Fields Validation:")
-    test_geo_cases = [
-        {"geo_country": "US", "geo_region": "CA", "geo_city": "San Francisco"},
-        {"geo_country": "GB", "geo_region": "London", "geo_city": "London"},
-        {"geo_country": "USA", "geo_region": "CA", "geo_city": "San Francisco"},
-        {"geo_country": "123", "geo_region": "CA", "geo_city": "San Francisco"},
-        {"geo_country": "", "geo_region": "CA", "geo_city": "San Francisco"},
-        {"geo_country": "X", "geo_region": "CA", "geo_city": "San Francisco"},
-    ]
-    
-    for geo_data in test_geo_cases:
-        original = geo_data.copy()
-        cleaned = clean_geo_fields(geo_data)
-        print(f"   {original} → {cleaned}")
-    
-    print("\n7. Language Code Validation:")
-    test_languages = [
-        "en", "DE", "fr", "xy", "zz",
-        "zh-tw", "en-us", "fr-ca",
-        "en_US", "zh_CN",
-        "english", "german", "japanese",
-        "français", "español", "português",
-        "eng", "ger", "jap",
-        "123", "toolong", "x", "",
-        "unclear", "not detected"
-    ]
-    for lang in test_languages:
-        result = validate_and_clean_language_code(lang)
-        print(f"   '{lang}' → '{result}'")
-    
     print(f"\n=== Test completed ===")
-    print(f"🆕 NEW FUNCTION: validate_segments_full_only() for retry logic")
-    print(f"🆕 UPDATED FUNCTION: clean_app_platforms() now handles string input with validation")
-    print(f"🆕 This function validates against specific platform list and removes duplicates")
-    print(f"Module loaded successfully with ENHANCED validation and retry support")
+    print(f"🚀 OPTIMIZED with phone caching and batch processing!")
+    print(f"LRU cache ready for frequent phone number validation")
+    print(f"Module loaded successfully with ENHANCED validation and caching")

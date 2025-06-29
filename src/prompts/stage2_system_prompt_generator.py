@@ -173,8 +173,21 @@ base_sections = [
 _CRIT = {"must", "should", "need", "always", "double-check",
          "NOT", "geo_scope", "ALL", "Focus", "VALIDATION"}
 
-compiled_words = {w: re.compile(rf'\b{re.escape(w)}\b', re.I)
-                  for w in word_variations if w not in _CRIT}
+_PRECOMPILED_WORD_PATTERNS = {}
+_PRECOMPILED_PHRASE_LOOKUP = {}
+
+def _precompile_patterns():
+    """Компілює всі regex patterns один раз при імпорті модуля"""
+    global _PRECOMPILED_WORD_PATTERNS, _PRECOMPILED_PHRASE_LOOKUP
+    
+    for word in word_variations:
+        if word not in _CRIT:
+            _PRECOMPILED_WORD_PATTERNS[word] = re.compile(rf'\b{re.escape(word)}\b', re.I)
+    
+    for phrase, variations in phrase_variations.items():
+        _PRECOMPILED_PHRASE_LOOKUP[phrase] = variations
+
+_precompile_patterns()
 
 compiled_fixes = [
     (re.compile(r'\bspecialist specialized\b', re.I), 'specialist'),
@@ -214,9 +227,10 @@ def _fix_this_list(segment: str) -> str:
     return ", ".join(f"this {w}" for w in out)
 
 
-def _apply_words(text: str) -> str:
-    for w, rx in compiled_words.items():
-        text = rx.sub(lambda m: _pc(m.group(0), random.choice(word_variations[w])), text)
+def _apply_words_optimized(text: str) -> str:
+    """Оптимізована версія з pre-compiled regex patterns"""
+    for word, pattern in _PRECOMPILED_WORD_PATTERNS.items():
+        text = pattern.sub(lambda m: _pc(m.group(0), random.choice(word_variations[word])), text)
     return text
 
 
@@ -233,10 +247,11 @@ def generate_system_prompt(segment_combined: str = "", domain_full: str = "", fa
             sections_with_variables.append(section)
     
     if failed_segments_full:
-        sections_with_variables.append(f"WARNING: Be careful reading this prompt instructions because previous response '{failed_segments_full}' failed validation.")
+        failed_joined = failed_segments_full.replace(' ', '')
+        sections_with_variables.append(f"RETRY WARNING: Your previous segments_full '{failed_segments_full}' failed validation. Result joins to: '{failed_joined}' These do NOT match! Please provide segments that join exactly to '{domain_core}'")
     
     txt = " ".join(
-        _apply_words(random.choice(phrase_variations[s]) if s in phrase_variations else s)
+        _apply_words_optimized(random.choice(_PRECOMPILED_PHRASE_LOOKUP.get(s, [s])))
         for s in sections_with_variables
     )
     
@@ -254,10 +269,21 @@ if __name__ == "__main__":
     test_domain = "bookstore.com"
     test_failed = "global multimedia protocols group"
     
-    print("=== Normal prompt ===")
-    system_prompt = generate_system_prompt(test_segment, test_domain)
+    print("=== Optimized Stage2 Prompt Generator Test ===")
+    print(f"Pre-compiled word patterns: {len(_PRECOMPILED_WORD_PATTERNS)}")
+    print(f"Pre-compiled phrase variations: {len(_PRECOMPILED_PHRASE_LOOKUP)}")
+    
+    print("\n=== Normal prompt ===")
+    import time
+    start_time = time.time()
+    for i in range(100):
+        system_prompt = generate_system_prompt(test_segment, test_domain)
+    end_time = time.time()
+    print(f"100 prompt generations took: {(end_time - start_time):.4f}s")
     print(system_prompt[-200:])
     
     print("\n=== Retry prompt with failed segments ===")
     retry_prompt = generate_system_prompt(test_segment, test_domain, test_failed)
     print(retry_prompt[-200:])
+    
+    print(f"\n🚀 OPTIMIZED with pre-compiled regex patterns!")

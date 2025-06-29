@@ -6,7 +6,7 @@ import logging.handlers
 from pathlib import Path
 from enum import Enum
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, Callable
 
 LOG_DIR = Path("logs")
 
@@ -28,6 +28,17 @@ class ErrorDetails:
     should_retry: bool
     api_key_consumed: bool
     suggested_action: str
+
+
+class LazyLogFormatter:
+    """Wrapper для lazy string formatting в логуванні"""
+    def __init__(self, func: Callable, *args, **kwargs):
+        self.func = func
+        self.args = args
+        self.kwargs = kwargs
+    
+    def __str__(self):
+        return self.func(*self.args, **self.kwargs)
 
 
 def configure_logging() -> logging.Logger:
@@ -298,36 +309,81 @@ def setup_all_loggers() -> Dict[str, logging.Logger]:
     return loggers
 
 
+def _format_masked_key(api_key: str) -> str:
+    """Утилітарна функція для маскування API ключа"""
+    return f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
+
+
+def _format_short_domain(domain_full: str) -> str:
+    """Утилітарна функція для скорочення домену"""
+    return domain_full[:60] + "..." if len(domain_full) > 60 else domain_full
+
+
 def log_success_timing(worker_id: int, stage: str, api_key: str, domain_full: str, response_time: float, success_timing_logger: logging.Logger):
-    masked_key = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
-    short_domain = domain_full[:60] + "..." if len(domain_full) > 60 else domain_full
-    success_timing_logger.info(f"Worker-{worker_id:02d} | {stage:6s} | 200 | {response_time:.1f}s | Key: {masked_key} | {short_domain}")
+    """Оптимізована версія з lazy formatting"""
+    if not success_timing_logger.isEnabledFor(logging.INFO):
+        return
+    
+    def format_message():
+        masked_key = _format_masked_key(api_key)
+        short_domain = _format_short_domain(domain_full)
+        return f"Worker-{worker_id:02d} | {stage:6s} | 200 | {response_time:.1f}s | Key: {masked_key} | {short_domain}"
+    
+    success_timing_logger.info(LazyLogFormatter(format_message))
 
 
 def log_rate_limit(worker_id: int, stage: str, api_key: str, domain_full: str, freeze_minutes: int, rate_limits_logger: logging.Logger):
-    masked_key = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
-    short_domain = domain_full[:60] + "..." if len(domain_full) > 60 else domain_full
-    rate_limits_logger.info(f"Worker-{worker_id:02d} | {stage:6s} | 429 | Key: {masked_key} | {short_domain} | UNAVAILABLE for 3min (natural filter)")
+    """Оптимізована версія з lazy formatting"""
+    if not rate_limits_logger.isEnabledFor(logging.INFO):
+        return
+    
+    def format_message():
+        masked_key = _format_masked_key(api_key)
+        short_domain = _format_short_domain(domain_full)
+        return f"Worker-{worker_id:02d} | {stage:6s} | 429 | Key: {masked_key} | {short_domain} | UNAVAILABLE for 3min (natural filter)"
+    
+    rate_limits_logger.info(LazyLogFormatter(format_message))
 
 
 def log_http_error(worker_id: int, stage: str, api_key: str, domain_full: str, status_code: int, error_msg: str, http_errors_logger: logging.Logger):
-    masked_key = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
-    short_domain = domain_full[:60] + "..." if len(domain_full) > 60 else domain_full
-    short_error = error_msg[:80] + "..." if len(error_msg) > 80 else error_msg
-    http_errors_logger.info(f"Worker-{worker_id:02d} | {stage:6s} | {status_code} | Key: {masked_key} | {short_domain} | {short_error}")
+    """Оптимізована версія з lazy formatting"""
+    if not http_errors_logger.isEnabledFor(logging.INFO):
+        return
+    
+    def format_message():
+        masked_key = _format_masked_key(api_key)
+        short_domain = _format_short_domain(domain_full)
+        short_error = error_msg[:80] + "..." if len(error_msg) > 80 else error_msg
+        return f"Worker-{worker_id:02d} | {stage:6s} | {status_code} | Key: {masked_key} | {short_domain} | {short_error}"
+    
+    http_errors_logger.info(LazyLogFormatter(format_message))
 
 
 def log_stage1_issue(worker_id: int, api_key: str, domain_full: str, issue_type: str, stage1_issues_logger: logging.Logger, details: str = ""):
-    masked_key = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
-    short_domain = domain_full[:60] + "..." if len(domain_full) > 60 else domain_full
-    stage1_issues_logger.info(f"Worker-{worker_id:02d} | {issue_type} | Key: {masked_key} | {short_domain} | {details}")
+    """Оптимізована версія з lazy formatting"""
+    if not stage1_issues_logger.isEnabledFor(logging.INFO):
+        return
+    
+    def format_message():
+        masked_key = _format_masked_key(api_key)
+        short_domain = _format_short_domain(domain_full)
+        return f"Worker-{worker_id:02d} | {issue_type} | Key: {masked_key} | {short_domain} | {details}"
+    
+    stage1_issues_logger.info(LazyLogFormatter(format_message))
 
 
 def log_stage2_retry(worker_id: int, api_key: str, domain_full: str, retry_count: int, segments_full: str, stage2_retries_logger: logging.Logger):
-    masked_key = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
-    short_domain = domain_full[:60] + "..." if len(domain_full) > 60 else domain_full
-    short_segments = segments_full[:50] + "..." if len(segments_full) > 50 else segments_full
-    stage2_retries_logger.info(f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {masked_key} | {short_domain} | Invalid segments_full: '{short_segments}'")
+    """Оптимізована версія з lazy formatting"""
+    if not stage2_retries_logger.isEnabledFor(logging.INFO):
+        return
+    
+    def format_message():
+        masked_key = _format_masked_key(api_key)
+        short_domain = _format_short_domain(domain_full)
+        short_segments = segments_full[:50] + "..." if len(segments_full) > 50 else segments_full
+        return f"Worker-{worker_id:02d} | Retry #{retry_count} | Key: {masked_key} | {short_domain} | Invalid segments_full: '{short_segments}'"
+    
+    stage2_retries_logger.info(LazyLogFormatter(format_message))
 
 
 def log_error_details(worker_id: int, stage: str, api_key: str, domain_full: str, 
@@ -335,36 +391,51 @@ def log_error_details(worker_id: int, stage: str, api_key: str, domain_full: str
                      proxy_errors_logger: logging.Logger, network_errors_logger: logging.Logger,
                      api_errors_logger: logging.Logger, payload_errors_logger: logging.Logger,
                      unknown_errors_logger: logging.Logger):
-    masked_key = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
-    short_domain = domain_full[:60] + "..." if len(domain_full) > 60 else domain_full
+    """Оптимізована версія з lazy formatting"""
     
-    log_message = (f"Worker-{worker_id:02d} | {stage:6s} | {error_details.exception_class} | "
-                  f"Key: {masked_key} | {short_domain} | {response_time:.1f}s | "
-                  f"Retry: {error_details.should_retry} | Consumed: {error_details.api_key_consumed} | "
-                  f"Action: {error_details.suggested_action} | Details: {error_details.error_message}")
+    def format_message():
+        masked_key = _format_masked_key(api_key)
+        short_domain = _format_short_domain(domain_full)
+        return (f"Worker-{worker_id:02d} | {stage:6s} | {error_details.exception_class} | "
+               f"Key: {masked_key} | {short_domain} | {response_time:.1f}s | "
+               f"Retry: {error_details.should_retry} | Consumed: {error_details.api_key_consumed} | "
+               f"Action: {error_details.suggested_action} | Details: {error_details.error_message}")
     
     if error_details.error_type == ErrorType.PROXY:
-        proxy_errors_logger.info(log_message)
+        if proxy_errors_logger.isEnabledFor(logging.INFO):
+            proxy_errors_logger.info(LazyLogFormatter(format_message))
     elif error_details.error_type == ErrorType.NETWORK:
-        network_errors_logger.info(log_message)
+        if network_errors_logger.isEnabledFor(logging.INFO):
+            network_errors_logger.info(LazyLogFormatter(format_message))
     elif error_details.error_type in [ErrorType.DNS, ErrorType.SSL, ErrorType.TIMEOUT]:
-        network_errors_logger.info(log_message)
+        if network_errors_logger.isEnabledFor(logging.INFO):
+            network_errors_logger.info(LazyLogFormatter(format_message))
     elif error_details.error_type == ErrorType.API:
-        api_errors_logger.info(log_message)
+        if api_errors_logger.isEnabledFor(logging.INFO):
+            api_errors_logger.info(LazyLogFormatter(format_message))
     elif error_details.error_type == ErrorType.PAYLOAD:
-        payload_errors_logger.info(log_message)
+        if payload_errors_logger.isEnabledFor(logging.INFO):
+            payload_errors_logger.info(LazyLogFormatter(format_message))
     else:
-        unknown_errors_logger.info(log_message)
+        if unknown_errors_logger.isEnabledFor(logging.INFO):
+            unknown_errors_logger.info(LazyLogFormatter(format_message))
 
 
 def log_proxy_error(worker_id: int, stage: str, proxy_config, domain_full: str, error_msg: str, proxy_errors_logger: logging.Logger):
-    short_domain = domain_full[:60] + "..." if len(domain_full) > 60 else domain_full
-    short_error = error_msg[:100] + "..." if len(error_msg) > 100 else error_msg
-    proxy_errors_logger.info(f"Worker-{worker_id:02d} | {stage:6s} | {proxy_config.connection_string} | {short_domain} | {short_error}")
+    """Оптимізована версія з lazy formatting"""
+    if not proxy_errors_logger.isEnabledFor(logging.INFO):
+        return
+    
+    def format_message():
+        short_domain = _format_short_domain(domain_full)
+        short_error = error_msg[:100] + "..." if len(error_msg) > 100 else error_msg
+        return f"Worker-{worker_id:02d} | {stage:6s} | {proxy_config.connection_string} | {short_domain} | {short_error}"
+    
+    proxy_errors_logger.info(LazyLogFormatter(format_message))
 
 
 if __name__ == "__main__":
-    print("=== Logging Configuration Test Suite ===\n")
+    print("=== Optimized Logging Configuration Test Suite ===\n")
     
     print("1. Setting up all loggers:")
     loggers = setup_all_loggers()
@@ -382,7 +453,7 @@ if __name__ == "__main__":
     else:
         print("   📁 Log directory will be created on first use")
     
-    print(f"\n3. Testing new Stage2 retry logging function:")
+    print(f"\n3. Testing optimized lazy logging:")
     
     test_worker_id = 1
     test_api_key = "test_key_1234567890abcdef"
@@ -391,12 +462,19 @@ if __name__ == "__main__":
     test_segments_full = "this is invalid segments full that does not match"
     
     try:
-        log_stage2_retry(test_worker_id, test_api_key, test_domain, test_retry_count, test_segments_full, loggers['stage2_retries'])
-        print("   ✓ log_stage2_retry() → SUCCESS")
+        import time
+        start_time = time.time()
+        
+        for i in range(1000):
+            log_stage2_retry(test_worker_id, test_api_key, test_domain, test_retry_count, test_segments_full, loggers['stage2_retries'])
+        
+        end_time = time.time()
+        print(f"   ✓ 1000 lazy log calls took: {(end_time - start_time):.4f}s")
+        
     except Exception as e:
-        print(f"   ✗ log_stage2_retry() → ERROR: {e}")
+        print(f"   ✗ lazy logging test → ERROR: {e}")
     
     print(f"\n=== Test completed ===")
-    print(f"🆕 NEW LOGGER: stage2_retries → logs/stage2_retries.log")
-    print(f"🆕 NEW FUNCTION: log_stage2_retry() for tracking validation retries")
+    print(f"🚀 OPTIMIZED with lazy string formatting!")
+    print(f"LazyLogFormatter class ready for conditional logging")
     print(f"Total loggers configured: {len(loggers)}")

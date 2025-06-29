@@ -56,15 +56,11 @@ from utils.network_error_classifier import (
     ErrorType, ErrorDetails, classify_exception, is_proxy_error
 )
 
-# ==================== ГЛОБАЛЬНІ ЗМІННІ ====================
-
 LOG_DIR = Path("logs")
 MAX_STAGE2_RETRIES = 5
 
-# Глобальний event для graceful shutdown
 shutdown_event = asyncio.Event()
 
-# Отримуємо всі конфігурації через ConfigManager
 MONGO_CONFIG = ConfigManager.get_mongo_config()
 SCRIPT_CONFIG = ConfigManager.get_script_config()
 STAGE2_SCHEMA = ConfigManager.get_stage2_schema()
@@ -103,8 +99,6 @@ CONNECTION_ERRORS = (
     ClientSSLError
 )
 
-# ==================== ЛОГУВАННЯ ====================
-
 all_loggers = setup_all_loggers()
 logger = all_loggers['system_errors']
 success_timing_logger = all_loggers['success_timing']
@@ -121,8 +115,6 @@ ip_usage_logger = all_loggers['ip_usage']
 revert_reasons_logger = all_loggers['revert_reasons']
 short_response_debug_logger = all_loggers['short_response_debug']
 segmentation_validation_logger = all_loggers['segmentation_validation']
-
-# ==================== ДОПОМІЖНІ ФУНКЦІЇ ====================
 
 def log_success_timing_wrapper(worker_id: int, stage: str, api_key: str, domain_full: str, response_time: float):
     log_success_timing(worker_id, stage, api_key, domain_full, response_time, success_timing_logger)
@@ -149,26 +141,21 @@ def get_key_suffix(api_key: str) -> str:
     return f"...{api_key[-4:]}" if len(api_key) >= 4 else "***"
 
 def setup_signal_handlers():
-    """Налаштовує обробники сигналів для graceful shutdown"""
     def signal_handler(signum, frame):
         print(f"\n🛑 Received signal {signum}, initiating graceful shutdown...")
         shutdown_event.set()
     
-    # Реєструємо обробники для різних сигналів
-    signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
-    signal.signal(signal.SIGTERM, signal_handler)  # Термінація
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
     
-    # SIGUSR1 для graceful restart (тільки на Unix)
     try:
         signal.signal(signal.SIGUSR1, signal_handler)
     except AttributeError:
-        pass  # Windows не підтримує SIGUSR1
+        pass
 
 async def check_shutdown_periodically():
-    """Періодично перевіряє конфігурацію і встановлює shutdown_event якщо треба"""
     while not shutdown_event.is_set():
         try:
-            # Перевіряємо enabled статус кожні 30 секунд
             await asyncio.sleep(30)
             if not ConfigManager.is_script_enabled():
                 print("🛑 Script disabled in config, initiating graceful shutdown...")
@@ -177,8 +164,6 @@ async def check_shutdown_periodically():
         except Exception as e:
             logger.error(f"Error checking script status: {e}")
             await asyncio.sleep(5)
-
-# ==================== IP REFRESH ФУНКЦІЯ ====================
 
 async def get_current_ip_with_retry(proxy_config: ProxyConfig, mongo_client: AsyncIOMotorClient, key_id: str, max_attempts: int = 4) -> Tuple[ProxyConfig, str]:
     current_proxy = proxy_config
@@ -221,8 +206,6 @@ async def get_current_ip_with_retry(proxy_config: ProxyConfig, mongo_client: Asy
             
     return current_proxy, ""
 
-# ==================== ОБРОБКА РЕЗУЛЬТАТІВ ====================
-
 async def handle_stage_result(mongo_client, worker_id, stage_name, api_key, domain_full, proxy_config, key_record_id, result):
     status_code = result.get("status_code")
     response_time = result.get("response_time", 0)
@@ -260,11 +243,7 @@ async def handle_stage_result(mongo_client, worker_id, stage_name, api_key, doma
     freeze_minutes_param = None
     await finalize_api_key_usage(mongo_client, key_record_id, status_code, is_proxy_err, proxy_config, freeze_minutes_param)
 
-# ==================== ВОРКЕР ====================
-
-async def worker(worker_id: int):
-    mongo_client = AsyncIOMotorClient(API_DB_URI, **CLIENT_PARAMS)
-    
+async def worker(worker_id: int, shared_mongo_client: AsyncIOMotorClient):
     gemini_client = create_gemini_client(
         stage2_schema=STAGE2_SCHEMA,
         start_delay_ms=START_DELAY_MS,
@@ -274,15 +253,15 @@ async def worker(worker_id: int):
     try:
         while not shutdown_event.is_set():
             try:
-                target_uri, domain_full, domain_id = await get_domain_for_analysis(mongo_client)
+                target_uri, domain_full, domain_id = await get_domain_for_analysis(shared_mongo_client)
                 
-                segment_combined = await get_domain_segmentation_info(mongo_client, domain_full)
+                segment_combined = await get_domain_segmentation_info(shared_mongo_client, domain_full)
                 
-                api_key1, proxy_config1, key_record_id1, key_rec1 = await get_api_key_and_proxy(mongo_client, "stage1")
+                api_key1, proxy_config1, key_record_id1, key_rec1 = await get_api_key_and_proxy(shared_mongo_client, "stage1")
                 if needs_ip_refresh(key_rec1):
                     working_proxy1, detected_ip1 = await get_current_ip_with_retry(
                         proxy_config1, 
-                        mongo_client, 
+                        shared_mongo_client, 
                         key_record_id1
                     )
                 else:
@@ -290,8 +269,8 @@ async def worker(worker_id: int):
                     detected_ip1 = key_rec1["current_ip"]
                 
                 if not detected_ip1:
-                    await finalize_api_key_usage(mongo_client, key_record_id1, None, True, working_proxy1)
-                    await revert_domain_status(mongo_client, domain_id, "proxy_ip_refresh_failed", revert_reasons_logger)
+                    await finalize_api_key_usage(shared_mongo_client, key_record_id1, None, True, working_proxy1)
+                    await revert_domain_status(shared_mongo_client, domain_id, "proxy_ip_refresh_failed", revert_reasons_logger)
                     continue
                 
                 try:
@@ -300,10 +279,10 @@ async def worker(worker_id: int):
                     stage1_result = await gemini_client.analyze_content(
                         domain_full, api_key1, working_proxy1, stage1_prompt, use_google_search=True
                     )
-                    await handle_stage_result(mongo_client, worker_id, "Stage1", api_key1, domain_full, working_proxy1, key_record_id1, stage1_result)
+                    await handle_stage_result(shared_mongo_client, worker_id, "Stage1", api_key1, domain_full, working_proxy1, key_record_id1, stage1_result)
                     
                     if not stage1_result["success"] or stage1_result.get("status_code") != 200:
-                        await revert_domain_status(mongo_client, domain_id, "stage1_request_failed", revert_reasons_logger)
+                        await revert_domain_status(shared_mongo_client, domain_id, "stage1_request_failed", revert_reasons_logger)
                         continue
                     
                     grounding_status = stage1_result.get("grounding_status", "UNKNOWN")
@@ -311,33 +290,33 @@ async def worker(worker_id: int):
                     
                     if grounding_status == "NO_CANDIDATES":
                         log_stage1_issue_wrapper(worker_id, api_key1, domain_full, "NO_CANDIDATES", "")
-                        await revert_domain_status(mongo_client, domain_id, "no_candidates", revert_reasons_logger)
+                        await revert_domain_status(shared_mongo_client, domain_id, "no_candidates", revert_reasons_logger)
                         continue
                     
                     if len(text_response.strip()) < 200:
                         response_lower = text_response.lower()
                         if "inaccessible" in response_lower:
                             log_stage1_issue_wrapper(worker_id, api_key1, domain_full, "WEBSITE_INACCESSIBLE", "Short response with inaccessible")
-                            await set_domain_error_status(mongo_client, domain_id, "inaccessible")
+                            await set_domain_error_status(shared_mongo_client, domain_id, "inaccessible")
                             continue
                         elif "placeholder" in response_lower:
                             log_stage1_issue_wrapper(worker_id, api_key1, domain_full, "PLACEHOLDER_PAGE", "Short response with placeholder")
-                            await set_domain_error_status(mongo_client, domain_id, "placeholder")
+                            await set_domain_error_status(shared_mongo_client, domain_id, "placeholder")
                             continue
                         else:
                             log_stage1_issue_wrapper(worker_id, api_key1, domain_full, "SHORT_RESPONSE", f"{len(text_response)} chars")
                             short_response_debug_logger.info(f"Domain: {domain_full} | Length: {len(text_response)} | Content: {text_response}")
-                            await revert_domain_status(mongo_client, domain_id, "short_response", revert_reasons_logger)
+                            await revert_domain_status(shared_mongo_client, domain_id, "short_response", revert_reasons_logger)
                             continue
                     
                     if grounding_status == "URL_RETRIEVAL_STATUS_ERROR":
                         log_stage1_issue_wrapper(worker_id, api_key1, domain_full, "URL_RETRIEVAL_ERROR", "")
-                        await revert_domain_status(mongo_client, domain_id, "url_retrieval_error", revert_reasons_logger)
+                        await revert_domain_status(shared_mongo_client, domain_id, "url_retrieval_error", revert_reasons_logger)
                         continue
                     
                     if grounding_status == "NON_JSON_RESPONSE":
                         log_stage1_issue_wrapper(worker_id, api_key1, domain_full, "NON_JSON_RESPONSE", "API returned HTML")
-                        await revert_domain_status(mongo_client, domain_id, "non_json_response", revert_reasons_logger)
+                        await revert_domain_status(shared_mongo_client, domain_id, "non_json_response", revert_reasons_logger)
                         continue
                     
                 except Exception as stage1_exception:
@@ -345,9 +324,9 @@ async def worker(worker_id: int):
                     log_error_details_wrapper(worker_id, "Stage1", api_key1, domain_full, error_details)
                     
                     is_proxy_err = error_details.error_type == ErrorType.PROXY
-                    await finalize_api_key_usage(mongo_client, key_record_id1, None, is_proxy_err, working_proxy1)
+                    await finalize_api_key_usage(shared_mongo_client, key_record_id1, None, is_proxy_err, working_proxy1)
                     logger.error(f"Worker {worker_id}: Stage1 {error_details.exception_class} with {working_proxy1.connection_string}: {stage1_exception}")
-                    await revert_domain_status(mongo_client, domain_id, f"stage1_exception:{error_details.exception_class}", revert_reasons_logger)
+                    await revert_domain_status(shared_mongo_client, domain_id, f"stage1_exception:{error_details.exception_class}", revert_reasons_logger)
                     continue
                 
                 retry_count = 0
@@ -358,11 +337,11 @@ async def worker(worker_id: int):
                 
                 while retry_count <= MAX_STAGE2_RETRIES and not stage2_success:
                     try:
-                        api_key2, proxy_config2, key_record_id2, key_rec2 = await get_api_key_and_proxy(mongo_client, "stage2")
+                        api_key2, proxy_config2, key_record_id2, key_rec2 = await get_api_key_and_proxy(shared_mongo_client, "stage2")
                         if needs_ip_refresh(key_rec2):
                             working_proxy2, detected_ip2 = await get_current_ip_with_retry(
                                 proxy_config2, 
-                                mongo_client, 
+                                shared_mongo_client, 
                                 key_record_id2
                             )
                         else:
@@ -370,7 +349,7 @@ async def worker(worker_id: int):
                             detected_ip2 = key_rec2["current_ip"]
                         
                         if not detected_ip2:
-                            await finalize_api_key_usage(mongo_client, key_record_id2, None, True, working_proxy2)
+                            await finalize_api_key_usage(shared_mongo_client, key_record_id2, None, True, working_proxy2)
                             retry_count += 1
                             continue
                         
@@ -385,7 +364,7 @@ async def worker(worker_id: int):
                         stage2_result = await gemini_client.analyze_business(
                             domain_full, text_response, api_key2, working_proxy2, current_system_prompt, use_retry_model=use_retry_model
                         )
-                        await handle_stage_result(mongo_client, worker_id, "Stage2", api_key2, domain_full, working_proxy2, key_record_id2, stage2_result)
+                        await handle_stage_result(shared_mongo_client, worker_id, "Stage2", api_key2, domain_full, working_proxy2, key_record_id2, stage2_result)
                         
                         if stage2_result.get("success") and stage2_result.get("status_code") == 200:
                             result = stage2_result["result"]
@@ -411,13 +390,13 @@ async def worker(worker_id: int):
                         log_error_details_wrapper(worker_id, "Stage2", api_key2, domain_full, error_details)
                         
                         is_proxy_err = error_details.error_type == ErrorType.PROXY
-                        await finalize_api_key_usage(mongo_client, key_record_id2, None, is_proxy_err, working_proxy2)
+                        await finalize_api_key_usage(shared_mongo_client, key_record_id2, None, is_proxy_err, working_proxy2)
                         
                         retry_count += 1
                 
                 if stage2_success and final_stage2_result:
                     await save_gemini_results(
-                        mongo_client, domain_full, final_stage2_result, 
+                        shared_mongo_client, domain_full, final_stage2_result, 
                         grounding_status, domain_id, segment_combined, 
                         revert_logger=revert_reasons_logger, 
                         segmentation_logger=segmentation_validation_logger
@@ -427,7 +406,7 @@ async def worker(worker_id: int):
                         final_stage2_result = stage2_result.get("result", {}) if stage2_result else {}
                     
                     await save_gemini_results_with_validation_failed(
-                        mongo_client=mongo_client,
+                        mongo_client=shared_mongo_client,
                         domain_full=domain_full,
                         gemini_result=final_stage2_result or {},
                         grounding_status=grounding_status,
@@ -445,20 +424,17 @@ async def worker(worker_id: int):
                 logger.error(f"Worker {worker_id}: Unexpected error: {e}", exc_info=True)
                 await asyncio.sleep(5)
                 
-    finally:
-        mongo_client.close()
-
-# ==================== ОСНОВНА ФУНКЦІЯ ====================
+    except Exception as e:
+        logger.error(f"Worker {worker_id}: Fatal error: {e}", exc_info=True)
 
 async def main():
-    # Налаштовуємо signal handlers для graceful shutdown
     setup_signal_handlers()
     
+    shared_mongo_client = None
     workers = []
     config_checker = None
     
     try:
-        # Отримуємо конфігурацію через ConfigManager
         config_summary = ConfigManager.get_config_summary()
         
         current_workers = config_summary["concurrent_workers"]
@@ -474,17 +450,17 @@ async def main():
         if stage2_retry_model:
             print(f"🔄 Retry model: {stage2_retry_model} (used for Stage2 retries)")
         print(f"⏱️  Request interval: {START_DELAY_MS}ms between requests")
+        print(f"🔧 Max concurrent starts: {max_concurrent_starts}")
         
-        # Стартуємо задачу для періодичної перевірки конфігурації
+        shared_mongo_client = AsyncIOMotorClient(API_DB_URI, **CLIENT_PARAMS)
+        
         config_checker = asyncio.create_task(check_shutdown_periodically())
         
-        # Створюємо воркери
         workers = [
-            asyncio.create_task(worker(worker_id))
+            asyncio.create_task(worker(worker_id, shared_mongo_client))
             for worker_id in range(current_workers)
         ]
         
-        # Чекаємо завершення воркерів або shutdown event
         await asyncio.gather(*workers, config_checker, return_exceptions=True)
         
     except KeyboardInterrupt:
@@ -496,21 +472,21 @@ async def main():
         shutdown_event.set()
         
     finally:
-        # Graceful shutdown всіх задач
         print("🔄 Shutting down workers gracefully...")
         
-        # Скасовуємо config checker
         if config_checker and not config_checker.done():
             config_checker.cancel()
             
-        # Скасовуємо всі воркери
         for task in workers:
             if not task.done():
                 task.cancel()
         
-        # Чекаємо завершення всіх задач
         if workers or config_checker:
             await asyncio.gather(*workers, config_checker, return_exceptions=True)
+        
+        if shared_mongo_client:
+            print("🗃️  Closing shared MongoDB client...")
+            shared_mongo_client.close()
             
         print("✅ All workers stopped gracefully")
 

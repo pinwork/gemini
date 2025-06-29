@@ -1,8 +1,14 @@
-{
+  {
     "client_params": {
       "serverSelectionTimeoutMS": 30000,
       "connectTimeoutMS": 30000,
-      "socketTimeoutMS": 30000
+      "socketTimeoutMS": 30000,
+      "maxPoolSize": 300,
+      "minPoolSize": 50,
+      "maxIdleTimeMS": 30000,
+      "waitQueueTimeoutMS": 5000,
+      "retryWrites": true,
+      "retryReads": true
     },
     "databases": {
       "main_db": {
@@ -25,4 +31,4 @@
         }
       }
     }
-  }  
+  }

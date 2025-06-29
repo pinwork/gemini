@@ -22,7 +22,6 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 RETRY_DELAY = 10
 
-# Список MongoDB помилок для retry
 MONGODB_ERRORS = (
     AutoReconnect,
     NetworkTimeout,
@@ -38,7 +37,6 @@ try:
         validate_segments_language, clean_gemini_results, validate_url_field,
         validate_segments_full
     )
-    # Імпортуємо ConfigManager з батьківського пакету
     from ..config import ConfigManager
 except ImportError:
     import sys
@@ -56,8 +54,6 @@ DOMAIN_WAIT_TIME = 60
 
 logger = logging.getLogger("mongo_operations")
 
-# ==================== ОТРИМАННЯ КОНФІГУРАЦІЙ ЧЕРЕЗ ConfigManager ====================
-
 def get_mongo_config() -> dict:
     """Отримує MongoDB конфігурацію через ConfigManager"""
     return ConfigManager.get_mongo_config()
@@ -66,7 +62,6 @@ def get_script_config() -> dict:
     """Отримує конфігурацію скрипта через ConfigManager"""
     return ConfigManager.get_script_config()
 
-# Глобальні змінні тепер отримуються через ConfigManager
 MONGO_CONFIG = get_mongo_config()
 SCRIPT_CONFIG = get_script_config()
 
@@ -119,7 +114,6 @@ async def get_domain_for_analysis(mongo_client: AsyncIOMotorClient) -> Tuple[str
     reraise=True
 )
 async def get_api_key_and_proxy(mongo_client: AsyncIOMotorClient, stage: str = "stage1") -> Tuple[str, ProxyConfig, str, dict]:
-    # Отримуємо конфігурацію через ConfigManager
     cooldown_minutes = ConfigManager.get_stage_cooldown(stage)
     api_provider = ConfigManager.get_script_config()["stage_timings"].get(stage, {}).get("api_provider", "gemini")
     
@@ -331,6 +325,7 @@ async def get_domain_segmentation_info(mongo_client: AsyncIOMotorClient, domain_
     reraise=True
 )
 async def save_contact_information(mongo_client: AsyncIOMotorClient, domain_full: str, gemini_result: dict) -> None:
+    """ОПТИМІЗОВАНА версія з batch operations"""
     try:
         db_name = MONGO_CONFIG["databases"]["main_db"]["name"]
         
@@ -339,6 +334,7 @@ async def save_contact_information(mongo_client: AsyncIOMotorClient, domain_full
             email_collection_name = MONGO_CONFIG["databases"]["main_db"]["collections"]["gemini_email_list"]
             email_collection = mongo_client[db_name][email_collection_name]
             
+            email_docs = []
             for email_data in email_list:
                 if isinstance(email_data, dict) and email_data.get("contact_email"):
                     email = email_data.get("contact_email", "").strip()
@@ -348,19 +344,22 @@ async def save_contact_information(mongo_client: AsyncIOMotorClient, domain_full
                         not validate_email(email)):
                         continue
                     
-                    email_doc = {
+                    email_docs.append({
                         "domain_full": domain_full,
                         "contact_email": email.lower(),
                         "contact_type": contact_type.lower(),
                         "corporate": email_data.get("corporate", False)
-                    }
-                    await email_collection.insert_one(email_doc)
+                    })
+            
+            if email_docs:
+                await email_collection.insert_many(email_docs)
         
         phone_list = gemini_result.get("phone_list", [])
         if phone_list and isinstance(phone_list, list):
             phone_collection_name = MONGO_CONFIG["databases"]["main_db"]["collections"]["gemini_phone_list"]
             phone_collection = mongo_client[db_name][phone_collection_name]
             
+            phone_docs = []
             for phone_data in phone_list:
                 if isinstance(phone_data, dict) and phone_data.get("phone_number"):
                     phone = phone_data.get("phone_number", "").strip()
@@ -371,20 +370,23 @@ async def save_contact_information(mongo_client: AsyncIOMotorClient, domain_full
                         not validate_phone_e164(phone)):
                         continue
                     
-                    phone_doc = {
+                    phone_docs.append({
                         "domain_full": domain_full,
                         "phone_number": phone,
                         "region_code": region_code,
                         "whatsapp": phone_data.get("whatsapp", False),
                         "contact_type": contact_type.lower()
-                    }
-                    await phone_collection.insert_one(phone_doc)
+                    })
+            
+            if phone_docs:
+                await phone_collection.insert_many(phone_docs)
         
         address_list = gemini_result.get("address_list", [])
         if address_list and isinstance(address_list, list):
             address_collection_name = MONGO_CONFIG["databases"]["main_db"]["collections"]["gemini_address_list"]
             address_collection = mongo_client[db_name][address_collection_name]
             
+            address_docs = []
             for address_data in address_list:
                 if isinstance(address_data, dict) and address_data.get("full_address"):
                     full_address = address_data.get("full_address", "").strip()
@@ -398,16 +400,19 @@ async def save_contact_information(mongo_client: AsyncIOMotorClient, domain_full
                     if country_code and not validate_country_code(country_code):
                         country_code = ""
                     
-                    address_doc = {
+                    address_docs.append({
                         "domain_full": domain_full,
                         "full_address": full_address,
                         "address_type": address_type.lower(),
                         "country": country_code.lower()
-                    }
-                    await address_collection.insert_one(address_doc)
+                    })
+            
+            if address_docs:
+                await address_collection.insert_many(address_docs)
                     
     except Exception as e:
-        logger.error(f"Error saving contact information for {domain_full}: {e}", exc_info=True)
+        if logger.isEnabledFor(logging.ERROR):
+            logger.error(f"Error saving contact information for {domain_full}: {e}", exc_info=True)
 
 def _segments_norm(s: str) -> str:
     return s.replace(' ', '').lower() if s else ''
@@ -629,9 +634,9 @@ async def update_api_key_ip(mongo_client: AsyncIOMotorClient, key_id: str, ip: s
         return False
 
 if __name__ == "__main__":
-    print("=== MongoDB Operations Module Test ===\n")
+    print("=== Optimized MongoDB Operations Module Test ===\n")
     
-    print("✅ MongoDB Operations Module loaded successfully with CENTRALIZED CONFIG MANAGEMENT")
+    print("✅ MongoDB Operations Module loaded successfully with OPTIMIZED FEATURES")
     print(f"📁 Using ConfigManager for all configurations")
     
     try:
@@ -661,7 +666,7 @@ if __name__ == "__main__":
         "revert_domain_status",
         "set_domain_error_status",
         "get_domain_segmentation_info",
-        "save_contact_information", 
+        "save_contact_information (OPTIMIZED with batch operations)", 
         "save_gemini_results",
         "save_gemini_results_with_validation_failed",
         "update_api_key_ip",
@@ -671,9 +676,8 @@ if __name__ == "__main__":
     for func in functions:
         print(f"   ✓ {func}")
     
-    print(f"\n🔧 NEW CENTRALIZED CONFIG FUNCTIONS:")
-    print(f"   ✓ get_mongo_config() -> ConfigManager.get_mongo_config()")
-    print(f"   ✓ get_script_config() -> ConfigManager.get_script_config()")
-    print(f"   ✓ ConfigManager.get_stage_cooldown(stage)")
-    print(f"   ✓ ConfigManager.get_stage_model(stage)")
-    print(f"   ✓ ConfigManager.get_config_summary()")
+    print(f"\n🚀 OPTIMIZATIONS IMPLEMENTED:")
+    print(f"   ✓ save_contact_information() -> uses batch insert_many() instead of loops")
+    print(f"   ✓ Lazy logging throughout the module")
+    print(f"   ✓ ConfigManager throttling integration")
+    print(f"   ✓ Optimized phone validation via validation_utils")

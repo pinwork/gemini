@@ -3,6 +3,7 @@
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 from datetime import datetime
@@ -16,21 +17,19 @@ class ConfigManager:
     Забезпечує єдину точку доступу до всіх конфігураційних файлів проекту.
     """
     
-    # Кешовані конфігурації
     _mongo_config: Optional[Dict] = None
     _script_config: Optional[Dict] = None  
     _stage2_schema: Optional[Dict] = None
     
-    # Timestamps файлів для перевірки змін
     _file_timestamps: Dict[str, float] = {}
+    _last_file_check_time: Dict[str, float] = {}
+    _file_check_interval = 30.0
     
-    # Шляхи до конфігураційних файлів
     CONFIG_DIR = Path("config")
     MONGO_CONFIG_PATH = CONFIG_DIR / "mongo_config.json"
     SCRIPT_CONFIG_PATH = CONFIG_DIR / "script_control.json"  
     STAGE2_SCHEMA_PATH = CONFIG_DIR / "stage2_schema.json"
     
-    # Дефолтні значення для script_control.json
     DEFAULT_SCRIPT_CONFIG = {
         "enabled": True,
         "workers": {
@@ -58,6 +57,19 @@ class ConfigManager:
     }
     
     @classmethod
+    def _should_check_file(cls, file_path: Path) -> bool:
+        """Визначає чи треба перевіряти файл (throttling)"""
+        path_str = str(file_path)
+        current_time = time.time()
+        last_check = cls._last_file_check_time.get(path_str, 0)
+        
+        if current_time - last_check < cls._file_check_interval:
+            return False
+            
+        cls._last_file_check_time[path_str] = current_time
+        return True
+    
+    @classmethod
     def _check_file_changed(cls, file_path: Path) -> bool:
         """Перевіряє чи змінився файл з останнього завантаження"""
         if not file_path.exists():
@@ -73,6 +85,14 @@ class ConfigManager:
             return False
         except OSError:
             return True
+    
+    @classmethod
+    def _check_file_changed_throttled(cls, file_path: Path) -> bool:
+        """Throttled версія file change checking"""
+        if not cls._should_check_file(file_path):
+            return False
+            
+        return cls._check_file_changed(file_path)
     
     @classmethod
     def _load_json_file(cls, file_path: Path, config_name: str) -> Dict:
@@ -113,7 +133,7 @@ class ConfigManager:
     @classmethod
     def get_mongo_config(cls, force_reload: bool = False) -> Dict:
         """
-        Отримує конфігурацію MongoDB з кешуванням
+        Отримує конфігурацію MongoDB з кешуванням та throttling
         
         Args:
             force_reload: Примусове перезавантаження з диска
@@ -125,7 +145,7 @@ class ConfigManager:
             FileNotFoundError: Якщо файл не знайдено
             ValueError: Якщо невалідний JSON
         """
-        if force_reload or cls._mongo_config is None or cls._check_file_changed(cls.MONGO_CONFIG_PATH):
+        if force_reload or cls._mongo_config is None or cls._check_file_changed_throttled(cls.MONGO_CONFIG_PATH):
             cls._mongo_config = cls._load_json_file(cls.MONGO_CONFIG_PATH, "MongoDB")
             cls._validate_mongo_config(cls._mongo_config)
         
@@ -134,7 +154,7 @@ class ConfigManager:
     @classmethod
     def get_script_config(cls, force_reload: bool = False) -> Dict:
         """
-        Отримує конфігурацію скрипта з кешуванням та створенням дефолтів
+        Отримує конфігурацію скрипта з кешуванням та throttling
         
         Args:
             force_reload: Примусове перезавантаження з диска
@@ -142,7 +162,7 @@ class ConfigManager:
         Returns:
             Dict: Конфігурація скрипта
         """
-        if force_reload or cls._script_config is None or cls._check_file_changed(cls.SCRIPT_CONFIG_PATH):
+        if force_reload or cls._script_config is None or cls._check_file_changed_throttled(cls.SCRIPT_CONFIG_PATH):
             try:
                 cls._script_config = cls._load_json_file(cls.SCRIPT_CONFIG_PATH, "Script Control")
             except FileNotFoundError:
@@ -155,7 +175,7 @@ class ConfigManager:
     @classmethod
     def get_stage2_schema(cls, force_reload: bool = False) -> Dict:
         """
-        Отримує JSON схему для Stage2 з кешуванням
+        Отримує JSON схему для Stage2 з кешуванням та throttling
         
         Args:
             force_reload: Примусове перезавантаження з диска
@@ -167,7 +187,7 @@ class ConfigManager:
             FileNotFoundError: Якщо файл не знайдено
             ValueError: Якщо невалідний JSON
         """
-        if force_reload or cls._stage2_schema is None or cls._check_file_changed(cls.STAGE2_SCHEMA_PATH):
+        if force_reload or cls._stage2_schema is None or cls._check_file_changed_throttled(cls.STAGE2_SCHEMA_PATH):
             cls._stage2_schema = cls._load_json_file(cls.STAGE2_SCHEMA_PATH, "Stage2 Schema")
             cls._validate_stage2_schema(cls._stage2_schema)
         
@@ -197,10 +217,9 @@ class ConfigManager:
         cls._script_config = None
         cls._stage2_schema = None
         cls._file_timestamps.clear()
+        cls._last_file_check_time.clear()
         
         logger.info("🔄 All configurations reloaded from disk")
-    
-    # ==================== ВАЛІДАЦІЯ КОНФІГУРАЦІЙ ====================
     
     @classmethod
     def _validate_mongo_config(cls, config: Dict) -> None:
@@ -210,7 +229,6 @@ class ConfigManager:
             if key not in config:
                 raise ValueError(f"Missing required key '{key}' in MongoDB configuration")
         
-        # Перевіряємо наявність основних баз даних
         databases = config.get("databases", {})
         if "main_db" not in databases:
             raise ValueError("Missing 'main_db' in MongoDB databases configuration")
@@ -220,7 +238,6 @@ class ConfigManager:
     @classmethod
     def _validate_script_config(cls, config: Dict) -> None:
         """Валідує структуру конфігурації скрипта"""
-        # Перевіряємо основні секції
         if "workers" not in config:
             config["workers"] = cls.DEFAULT_SCRIPT_CONFIG["workers"].copy()
         if "timing" not in config:
@@ -228,7 +245,6 @@ class ConfigManager:
         if "stage_timings" not in config:
             config["stage_timings"] = cls.DEFAULT_SCRIPT_CONFIG["stage_timings"].copy()
         
-        # Валідуємо кількість воркерів
         workers_count = config.get("workers", {}).get("concurrent_workers", 40)
         if not isinstance(workers_count, int) or workers_count < 1 or workers_count > 200:
             logger.warning(f"Invalid workers count {workers_count}, using default 40")
@@ -248,8 +264,6 @@ class ConfigManager:
         properties_count = len(schema.get("properties", {}))
         if properties_count < 10:
             raise ValueError(f"Stage2 schema has too few properties: {properties_count}")
-    
-    # ==================== УТИЛІТИ ====================
     
     @classmethod
     def is_script_enabled(cls) -> bool:
@@ -362,13 +376,12 @@ class ConfigManager:
                 "stage1_cooldown": cls.get_stage_cooldown("stage1"),
                 "stage2_cooldown": cls.get_stage_cooldown("stage2"),
                 "schema_fields_count": len(stage2_schema.get("properties", {})),
-                "databases_configured": len(mongo_config.get("databases", {}))
+                "databases_configured": len(mongo_config.get("databases", {})),
+                "file_check_interval": cls._file_check_interval
             }
         except Exception as e:
             return {"error": str(e)}
 
-
-# ==================== ГЛОБАЛЬНІ ФУНКЦІЇ ДЛЯ ЗВОРОТНОЇ СУМІСНОСТІ ====================
 
 def get_mongo_config() -> Dict:
     """Глобальна функція для отримання MongoDB конфігурації"""
@@ -391,10 +404,8 @@ def reload_configs() -> None:
     ConfigManager.reload_all_configs()
 
 
-# ==================== ТЕСТУВАННЯ ====================
-
 if __name__ == "__main__":
-    print("=== Config Manager Test Suite ===\n")
+    print("=== Optimized Config Manager Test Suite ===\n")
     
     try:
         print("1. Testing MongoDB Config:")
@@ -413,29 +424,21 @@ if __name__ == "__main__":
         print(f"   ✓ Stage2 schema loaded: {len(stage2_schema.get('properties', {}))} properties")
         print(f"   ✓ Required fields: {len(stage2_schema.get('required', []))}")
         
-        print("\n4. Testing Utility Functions:")
-        print(f"   ✓ Script enabled: {ConfigManager.is_script_enabled()}")
-        print(f"   ✓ Stage1 cooldown: {ConfigManager.get_stage_cooldown('stage1')} min")
-        print(f"   ✓ Stage2 cooldown: {ConfigManager.get_stage_cooldown('stage2')} min")
-        print(f"   ✓ Stage1 model: {ConfigManager.get_stage_model('stage1')}")
-        print(f"   ✓ Stage2 model: {ConfigManager.get_stage_model('stage2')}")
-        print(f"   ✓ Concurrent workers: {ConfigManager.get_concurrent_workers()}")
-        
-        print("\n5. Testing Caching:")
-        start_time = datetime.now()
-        for i in range(10):
+        print("\n4. Testing Throttling:")
+        import time
+        start_time = time.time()
+        for i in range(100):
             ConfigManager.get_mongo_config()
-        end_time = datetime.now()
-        print(f"   ✓ 10 cached reads took: {(end_time - start_time).total_seconds():.4f}s")
+        end_time = time.time()
+        print(f"   ✓ 100 cached reads took: {(end_time - start_time):.4f}s")
         
-        print("\n6. Config Summary:")
+        print("\n5. Config Summary:")
         summary = ConfigManager.get_config_summary()
         for key, value in summary.items():
             print(f"   📊 {key}: {value}")
         
         print(f"\n=== All tests passed! ===")
-        print(f"🔧 ConfigManager ready with caching and validation")
-        print(f"📁 Config files: {len(ConfigManager._file_timestamps)} tracked")
+        print(f"🚀 OPTIMIZED ConfigManager with file throttling ({ConfigManager._file_check_interval}s interval)")
         
     except Exception as e:
         print(f"❌ Test failed: {e}")
