@@ -252,6 +252,21 @@ def configure_ip_usage_logging() -> logging.Logger:
     ip_usage_logger.addHandler(ip_usage_file_handler)
     return ip_usage_logger
 
+def configure_adaptive_delay_logging() -> logging.Logger:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    adaptive_delay_log_file = LOG_DIR / "adaptive_delay.log"
+    adaptive_delay_logger = logging.getLogger("adaptive_delay")
+    adaptive_delay_logger.handlers = []
+    adaptive_delay_logger.setLevel(logging.INFO)
+    adaptive_delay_logger.propagate = False
+    adaptive_delay_file_handler = logging.handlers.RotatingFileHandler(
+        adaptive_delay_log_file, maxBytes=5*1024*1024, backupCount=3, encoding="utf-8"
+    )
+    adaptive_delay_file_handler.setLevel(logging.INFO)
+    adaptive_delay_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
+    adaptive_delay_logger.addHandler(adaptive_delay_file_handler)
+    return adaptive_delay_logger
+
 def setup_all_loggers() -> Dict[str, logging.Logger]:
     loggers = {
         'system_errors': configure_logging(),
@@ -268,6 +283,7 @@ def setup_all_loggers() -> Dict[str, logging.Logger]:
         'unknown_errors': configure_unknown_errors_logging(),
         'ip_usage': configure_ip_usage_logging(),
         'revert_reasons': configure_revert_reasons_logging(),
+        'adaptive_delay': configure_adaptive_delay_logging(),
     }
     
     logging.getLogger('aiohttp.client').setLevel(logging.WARNING)
@@ -438,9 +454,9 @@ def log_proxy_error(worker_id: int, stage: str, proxy_config, domain_full: str, 
     proxy_errors_logger.info(LazyLogFormatter(format_message))
 
 if __name__ == "__main__":
-    print("=== Optimized Logging Configuration Test Suite ===\n")
+    print("=== Adaptive Delay Logging Configuration Test Suite ===\n")
     
-    print("1. Setting up all loggers:")
+    print("1. Setting up all loggers including adaptive_delay:")
     loggers = setup_all_loggers()
     for name, logger in loggers.items():
         handler_count = len(logger.handlers)
@@ -456,28 +472,20 @@ if __name__ == "__main__":
     else:
         print("   📁 Log directory will be created on first use")
     
-    print(f"\n3. Testing optimized lazy logging:")
+    print(f"\n3. Testing adaptive delay logger:")
     
-    test_worker_id = 1
-    test_api_key = "test_key_1234567890abcdef"
-    test_domain = "example.com"
-    test_retry_count = 2
-    test_segments_full = "this is invalid segments full that does not match"
+    adaptive_logger = loggers['adaptive_delay']
     
     try:
-        import time
-        start_time = time.time()
-        
-        for i in range(1000):
-            log_stage2_retry(test_worker_id, test_api_key, test_domain, test_retry_count, test_segments_full, loggers['stage2_retries'])
-        
-        end_time = time.time()
-        print(f"   ✓ 1000 lazy log calls took: {(end_time - start_time):.4f}s")
+        adaptive_logger.info("STARTUP RESET | Gemini Keys: 15 | Counters cleared for clean slate")
+        adaptive_logger.info("EVALUATION | Gemini Keys: 15 | Total 200: 8547 | Total 429: 183 | Success Rate: 97.9% | 700ms → 680ms")
+        adaptive_logger.info("RESET counters for 15 Gemini keys")
+        print("   ✓ Adaptive delay logging test successful")
         
     except Exception as e:
-        print(f"   ✗ lazy logging test → ERROR: {e}")
+        print(f"   ✗ adaptive delay logging test → ERROR: {e}")
     
     print(f"\n=== Test completed ===")
-    print(f"🚀 OPTIMIZED with lazy string formatting!")
-    print(f"LazyLogFormatter class ready for conditional logging")
+    print(f"🚀 NEW: adaptive_delay.log configured!")
     print(f"Total loggers configured: {len(loggers)}")
+    print(f"🔄 Ready for adaptive delay evaluation logging")

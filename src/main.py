@@ -58,6 +58,7 @@ from utils.logging_config import (
 from utils.network_error_classifier import (
     ErrorType, ErrorDetails, classify_exception, is_proxy_error
 )
+from utils.adaptive_delay_manager import AdaptiveDelayManager
 
 LOG_DIR = Path("logs")
 MAX_STAGE2_RETRIES = 5
@@ -117,6 +118,7 @@ unknown_errors_logger = all_loggers['unknown_errors']
 ip_usage_logger = all_loggers['ip_usage']
 revert_reasons_logger = all_loggers['revert_reasons']
 segmentation_validation_logger = all_loggers['segmentation_validation']
+adaptive_delay_logger = all_loggers['adaptive_delay']
 
 def log_success_timing_wrapper(worker_id: int, stage: str, api_key: str, domain_full: str, response_time: float):
     log_success_timing(worker_id, stage, api_key, domain_full, response_time, success_timing_logger)
@@ -166,6 +168,32 @@ async def check_shutdown_periodically():
         except Exception as e:
             logger.error(f"Error checking script status: {e}")
             await asyncio.sleep(5)
+
+async def periodic_adaptive_delay_evaluation(mongo_client: AsyncIOMotorClient):
+    await asyncio.sleep(10)
+    
+    while not shutdown_event.is_set():
+        try:
+            config = ConfigManager.get_script_config()
+            adaptive_config = config.get("adaptive_delay", {})
+            
+            if not adaptive_config.get("enabled", False):
+                await asyncio.sleep(3600)
+                continue
+            
+            evaluation_interval_hours = adaptive_config.get("evaluation_interval_hours", 6)
+            sleep_seconds = evaluation_interval_hours * 3600
+            
+            await asyncio.sleep(sleep_seconds)
+            
+            if shutdown_event.is_set():
+                break
+            
+            await AdaptiveDelayManager.evaluate_and_adjust(mongo_client, adaptive_delay_logger)
+            
+        except Exception as e:
+            logger.error(f"Error in adaptive delay evaluation: {e}")
+            await asyncio.sleep(300)
 
 async def get_current_ip_with_retry(proxy_config: ProxyConfig, mongo_client: AsyncIOMotorClient, key_id: str, max_attempts: int = 4) -> Tuple[ProxyConfig, str]:
     current_proxy = proxy_config
@@ -484,8 +512,13 @@ async def main():
     shared_mongo_client = None
     workers = []
     config_checker = None
+    adaptive_task = None
     
     try:
+        shared_mongo_client = AsyncIOMotorClient(API_DB_URI, **CLIENT_PARAMS)
+        
+        reset_count = await AdaptiveDelayManager.startup_reset(shared_mongo_client, adaptive_delay_logger)
+        
         config_summary = ConfigManager.get_config_summary()
         
         current_workers = config_summary["concurrent_workers"]
@@ -496,24 +529,43 @@ async def main():
         stage2_cooldown = config_summary["stage2_cooldown"]
         max_concurrent_starts = ConfigManager.get_max_concurrent_starts()
         
+        adaptive_config = ConfigManager.get_script_config().get("adaptive_delay", {})
+        adaptive_enabled = adaptive_config.get("enabled", False)
+        current_delay = adaptive_config.get("current_delay_ms", 700)
+        evaluation_interval = adaptive_config.get("evaluation_interval_hours", 6)
+        step_ms = adaptive_config.get("step_ms", 20)
+        
+        print(f"🧹 Clean slate: Reset counters for {reset_count} Gemini API keys")
         print(f"🚀 Starting {current_workers} workers...")
         print(f"🧪 Model configuration: Stage1={stage1_model} ({stage1_cooldown}min) | Stage2={stage2_model} ({stage2_cooldown}min)")
         if stage2_retry_model:
             print(f"🔄 Retry model: {stage2_retry_model} (used for Stage2 retries)")
-        print(f"⏱️  Request interval: {START_DELAY_MS}ms between requests")
+        
+        if adaptive_enabled:
+            print(f"⏱️  Adaptive delay: {current_delay}ms (step: -{step_ms}ms every {evaluation_interval}h)")
+            print(f"🎯 Adaptive range: {adaptive_config.get('min_delay_ms', 0)}ms - {adaptive_config.get('max_delay_ms', 700)}ms")
+        else:
+            print(f"⏱️  Fixed delay: {current_delay}ms (adaptive system disabled)")
+        
         print(f"🔧 Max concurrent starts: {max_concurrent_starts}")
         print(f"🔄 Short response retry: Up to 5 attempts with enhanced prompts")
         
-        shared_mongo_client = AsyncIOMotorClient(API_DB_URI, **CLIENT_PARAMS)
-        
         config_checker = asyncio.create_task(check_shutdown_periodically())
+        
+        if adaptive_enabled:
+            adaptive_task = asyncio.create_task(periodic_adaptive_delay_evaluation(shared_mongo_client))
+            print(f"🔄 Adaptive delay evaluation task started (every {evaluation_interval}h)")
         
         workers = [
             asyncio.create_task(worker(worker_id, shared_mongo_client))
             for worker_id in range(current_workers)
         ]
         
-        await asyncio.gather(*workers, config_checker, return_exceptions=True)
+        tasks_to_run = [*workers, config_checker]
+        if adaptive_task:
+            tasks_to_run.append(adaptive_task)
+        
+        await asyncio.gather(*tasks_to_run, return_exceptions=True)
         
     except KeyboardInterrupt:
         print("\n🛑 KeyboardInterrupt received, initiating graceful shutdown...")
@@ -529,12 +581,21 @@ async def main():
         if config_checker and not config_checker.done():
             config_checker.cancel()
             
+        if adaptive_task and not adaptive_task.done():
+            adaptive_task.cancel()
+            
         for task in workers:
             if not task.done():
                 task.cancel()
         
-        if workers or config_checker:
-            await asyncio.gather(*workers, config_checker, return_exceptions=True)
+        tasks_to_wait = [*workers]
+        if config_checker:
+            tasks_to_wait.append(config_checker)
+        if adaptive_task:
+            tasks_to_wait.append(adaptive_task)
+        
+        if tasks_to_wait:
+            await asyncio.gather(*tasks_to_wait, return_exceptions=True)
         
         if shared_mongo_client:
             print("🗃️  Closing shared MongoDB client...")

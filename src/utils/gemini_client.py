@@ -27,7 +27,6 @@ except ImportError:
     sys.path.append(str(Path(__file__).parent))
     from proxy_config import ProxyConfig
     from network_error_classifier import classify_exception
-    # Для standalone тестування
     try:
         from config import ConfigManager
     except ImportError:
@@ -59,13 +58,21 @@ class GeminiAPIError(Exception):
 
 
 def get_max_concurrent_starts() -> int:
-    """Отримує MAX_CONCURRENT_STARTS з конфігурації або використовує дефолт"""
     if ConfigManager:
         try:
             return ConfigManager.get_max_concurrent_starts()
         except Exception:
             pass
-    return 1  # Дефолтне значення
+    return 1
+
+def get_current_delay_ms() -> int:
+    if ConfigManager:
+        try:
+            config = ConfigManager.get_script_config()
+            return config.get("adaptive_delay", {}).get("current_delay_ms", 700)
+        except Exception:
+            pass
+    return 700
 
 
 class GeminiClient:
@@ -82,7 +89,6 @@ class GeminiClient:
         self.stage2_schema = stage2_schema or {}
         self.start_delay_ms = start_delay_ms
         
-        # Отримуємо MAX_CONCURRENT_STARTS з конфігурації
         max_concurrent_starts = get_max_concurrent_starts()
         
         if _stage_timing["stage1"]["semaphore"] is None:
@@ -115,7 +121,7 @@ class GeminiClient:
             last_time = _stage_timing[stage_key]["last_request_time"]
             time_since_last = current_time - last_time
             
-            min_interval = self.start_delay_ms / 1000.0
+            min_interval = get_current_delay_ms() / 1000.0
             sleep_time = max(0, min_interval - time_since_last)
             
             if sleep_time > 0:
@@ -442,6 +448,7 @@ class GeminiClient:
     
     def get_usage_stats(self) -> dict:
         max_concurrent_starts = get_max_concurrent_starts()
+        current_delay = get_current_delay_ms()
         
         return {
             "stage1_model": self.stage1_model,
@@ -452,7 +459,7 @@ class GeminiClient:
             "stage1_features": ["urlContext", "googleSearch"],
             "stage2_features": ["JSON_schema", "systemInstruction"],
             "timing_intervals": {
-                "start_delay_ms": self.start_delay_ms,
+                "current_delay_ms": current_delay,
                 "max_concurrent_starts": max_concurrent_starts
             }
         }
@@ -574,11 +581,12 @@ if __name__ == "__main__":
             schema = {}
         
         client = create_gemini_client(schema, start_delay_ms=500)
-        print(f"✓ GeminiClient created with {client.start_delay_ms}ms delay")
+        print(f"✓ GeminiClient created with adaptive delay support")
         
-        # Показуємо конфігурований MAX_CONCURRENT_STARTS
         max_concurrent = get_max_concurrent_starts()
+        current_delay = get_current_delay_ms()
         print(f"🔧 Max concurrent starts: {max_concurrent} (from config)")
+        print(f"⏱️  Current delay: {current_delay}ms (adaptive)")
         
         test_domain = "shopify.com"
         stage1_prompt = "Analyze this website and provide detailed information about its content, purpose, and functionality."
@@ -699,7 +707,7 @@ if __name__ == "__main__":
         print(f"\n" + "=" * 60)
         print("🎯 Test completed!")
         print("📝 This test shows RAW responses from Gemini API before any processing")
-        print(f"⏱️  Used custom delay: {client.start_delay_ms}ms (configurable)")
+        print(f"⏱️  Used adaptive delay: {current_delay}ms (dynamically configurable)")
         print(f"🔧 Max concurrent starts: {max_concurrent} (configurable)")
     
     async def main_test():

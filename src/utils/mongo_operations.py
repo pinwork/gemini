@@ -196,7 +196,6 @@ async def finalize_api_key_usage(mongo_client: AsyncIOMotorClient, key_record_id
         
         if status_code == 200:
             update_query["$inc"] = {"request_count_200": 1}
-            update_query["$set"]["request_count_429"] = 0
         elif status_code == 429:
             update_query["$inc"] = {"request_count_429": 1}
         
@@ -777,9 +776,9 @@ async def update_api_key_ip(mongo_client: AsyncIOMotorClient, key_id: str, ip: s
         return False
 
 if __name__ == "__main__":
-    print("=== MongoDB Operations - Retry Logic Clarification ===\n")
+    print("=== MongoDB Operations - Adaptive Delay Ready ===\n")
     
-    print("✅ MongoDB Operations Module loaded successfully with OPTIMIZED FEATURES")
+    print("✅ MongoDB Operations Module loaded successfully")
     print(f"📁 Using ConfigManager for all configurations")
     
     try:
@@ -801,30 +800,5 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"❌ Config loading failed: {e}")
     
-    print("\n📋 Available Functions:")
-    functions = [
-        "get_domain_for_analysis",
-        "get_api_key_and_proxy", 
-        "finalize_api_key_usage",
-        "increment_short_response_attempts",
-        "get_short_response_attempts",
-        "revert_domain_status_with_short_response_tracking",
-        "reset_short_response_attempts",
-        "revert_domain_status",
-        "set_domain_error_status",
-        "get_domain_segmentation_info",
-        "save_contact_information", 
-        "save_gemini_results (with segments_full_count)",
-        "save_gemini_results_with_validation_failed",
-        "update_api_key_ip"
-    ]
-    
-    for func in functions:
-        print(f"   ✓ {func}")
-    
-    print(f"\n🔄 Retry Logic Clarification:")
-    print(f"   • 'validation_failed' in segments_full is a RETRY MARKER, not final status")
-    print(f"   • It triggers stage2 retry logic in main.py")
-    print(f"   • Only becomes permanent after MAX_STAGE2_RETRIES exhausted")
-    print(f"   • segments_full_count = 0 for 'validation_failed' entries")
-    print(f"   • Proper count calculated only for validated segments")
+    print("\n🔄 CRITICAL CHANGE: request_count_429 NO LONGER resets on HTTP 200")
+    print("🧹 Clean accumulation for adaptive delay calculations")
