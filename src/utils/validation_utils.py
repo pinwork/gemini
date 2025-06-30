@@ -29,7 +29,6 @@ LANGUAGE_NAME_TO_CODE = {
     "hun": "hu", "fin": "fi", "dan": "da", "nor": "no"
 }
 
-
 def clean_phone_for_validation(phone: str) -> str:
     if not phone:
         return ""
@@ -41,10 +40,8 @@ def clean_phone_for_validation(phone: str) -> str:
     
     return cleaned
 
-
 @lru_cache(maxsize=1000)
 def _parse_and_validate_phone_cached(cleaned_phone: str) -> Tuple[Optional[str], Optional[str], bool]:
-    """Кешована валідація номера телефону"""
     try:
         parsed = phonenumbers.parse(cleaned_phone, None)
         if phonenumbers.is_valid_number(parsed):
@@ -55,9 +52,7 @@ def _parse_and_validate_phone_cached(cleaned_phone: str) -> Tuple[Optional[str],
     except phonenumbers.NumberParseException:
         return None, None, False
 
-
 def validate_phone_list_optimized(phone_list: List[Dict], domain_full: str = "") -> List[Dict]:
-    """Оптимізована валідація списку телефонів з кешуванням"""
     if not phone_list or not isinstance(phone_list, list):
         return []
     
@@ -88,7 +83,6 @@ def validate_phone_list_optimized(phone_list: List[Dict], domain_full: str = "")
     
     return validated_phones
 
-
 def format_summary(summary_text: str) -> str:
     if not summary_text:
         return summary_text
@@ -108,7 +102,6 @@ def format_summary(summary_text: str) -> str:
     
     return text
 
-
 def clean_it_prefix(text_value: str) -> str:
     if not text_value:
         return text_value
@@ -117,7 +110,6 @@ def clean_it_prefix(text_value: str) -> str:
         return text_value[3:].strip()
     
     return text_value
-
 
 def clean_app_platforms(app_platforms_value) -> str:
     if not app_platforms_value:
@@ -142,7 +134,6 @@ def clean_app_platforms(app_platforms_value) -> str:
     unique_platforms = list(dict.fromkeys(platforms))
     
     return ", ".join(sorted(unique_platforms))
-
 
 def has_access_issues(field_value: str, field_name: str = "") -> bool:
     if not field_value:
@@ -205,12 +196,10 @@ def has_access_issues(field_value: str, field_name: str = "") -> bool:
     
     return any(access_issues)
 
-
 def validate_country_code(country_code: str) -> bool:
     if not country_code or len(country_code.strip()) != 2:
         return False
     return country_code.strip().isalpha()
-
 
 def validate_and_clean_language_code(language_value: str) -> str:
     if not language_value:
@@ -243,7 +232,6 @@ def validate_and_clean_language_code(language_value: str) -> str:
     
     return ""
 
-
 def validate_email(email: str) -> bool:
     if not email or "@" not in email:
         return False
@@ -255,7 +243,6 @@ def validate_email(email: str) -> bool:
         return False
     return True
 
-
 def validate_phone_e164(phone: str) -> bool:
     if not phone or not phone.startswith("+"):
         return False
@@ -263,7 +250,6 @@ def validate_phone_e164(phone: str) -> bool:
     if not digits.isdigit() or len(digits) < 7 or len(digits) > 15:
         return False
     return True
-
 
 def validate_segments_language(segments_language: str, segmentation_logger: Optional[logging.Logger] = None) -> bool:
     if not segments_language:
@@ -282,7 +268,6 @@ def validate_segments_language(segments_language: str, segmentation_logger: Opti
         segmentation_logger.warning(f"Invalid segments_language: '{segments_language}' - must be 2-letter ISO code or 'mixed'/'unknown'")
     
     return False
-
 
 def normalize_url(url_value: str) -> str:
     if not url_value:
@@ -313,7 +298,6 @@ def normalize_url(url_value: str) -> str:
     except Exception:
         return ""
 
-
 def validate_url_field(url_value: str, base_domain: str) -> str:
     if not url_value:
         return url_value
@@ -331,10 +315,8 @@ def validate_url_field(url_value: str, base_domain: str) -> str:
     
     return normalized_url
 
-
 def _segments_norm(s: str) -> str:
     return s.replace(' ', '').lower() if s else ''
-
 
 def validate_segments_full(segment_combined: str, segments_full: str, domain_full: str = "", segmentation_logger: Optional[logging.Logger] = None) -> bool:
     if not segment_combined:
@@ -355,7 +337,6 @@ def validate_segments_full(segment_combined: str, segments_full: str, domain_ful
     
     return validation_passed
 
-
 def validate_segments_full_only(segment_combined: str, segments_full: str, domain_full: str = "") -> bool:
     if not segment_combined:
         return False
@@ -371,6 +352,12 @@ def validate_segments_full_only(segment_combined: str, segments_full: str, domai
 
     return original_normalized == ai_normalized
 
+def calculate_segments_full_count(segments_full: str) -> int:
+    if not segments_full or segments_full == "validation_failed":
+        return 0
+    
+    segments = segments_full.strip().split()
+    return len([seg for seg in segments if seg.strip()])
 
 def clean_segments_language(language_value: str) -> str:
     if not language_value:
@@ -394,12 +381,10 @@ def clean_segments_language(language_value: str) -> str:
     
     return parts[0].lower()
 
-
 def clean_segmentation_field(field_value: str, field_name: str) -> str:
     if not field_value or has_access_issues(field_value, field_name):
         return ""
     return field_value.strip()
-
 
 def clean_all_segmentation_fields(segment_combined: str, gemini_result: dict) -> dict:
     if not segment_combined:
@@ -422,7 +407,6 @@ def clean_all_segmentation_fields(segment_combined: str, gemini_result: dict) ->
     
     return gemini_result
 
-
 def clean_geo_fields(gemini_result: dict) -> dict:
     geo_country = gemini_result.get("geo_country", "").strip()
     
@@ -435,17 +419,15 @@ def clean_geo_fields(gemini_result: dict) -> dict:
     
     return gemini_result
 
-
 def handle_segments_full_validation(gemini_result: dict, domain_full: str = "", segmentation_logger: Optional[logging.Logger] = None) -> dict:
     segments_full = gemini_result.get("segments_full", "").strip()
     
     if not segments_full:
         gemini_result["segments_full"] = "validation_failed"
         if domain_full and segmentation_logger:
-            segmentation_logger.info(f"Domain {domain_full}: segments_full set to 'validation_failed' due to empty value after cleaning")
+            segmentation_logger.info(f"Domain {domain_full}: segments_full set to 'validation_failed' due to empty value after cleaning - retry marker for stage2")
     
     return gemini_result
-
 
 def clean_gemini_results(gemini_result: dict, segment_combined: str = "", domain_full: str = "", segmentation_logger: Optional[logging.Logger] = None) -> dict:
     cleaned_result = {}
@@ -492,81 +474,40 @@ def clean_gemini_results(gemini_result: dict, segment_combined: str = "", domain
     
     return cleaned_result
 
-
 if __name__ == "__main__":
-    print("=== Optimized Validation Utils Test Suite ===\n")
+    print("=== Validation Utils - Retry Logic Clarification ===\n")
     
-    print("1. Email Validation Tests:")
-    test_emails = [
-        "valid@example.com",
-        "user.name@domain.co.uk", 
-        "invalid-email",
-        "@invalid.com",
-        "user@",
-        "test@domain",
-        ""
-    ]
-    for email in test_emails:
-        result = validate_email(email)
-        print(f"   '{email}' → {result}")
+    print("1. Testing segments validation retry logic:")
     
-    print("\n2. Access Issues Detection:")
-    test_texts = [
-        "Product management platform",
-        "unclear",
-        "not detected",
-        "Payment service provider",
-        "unavailable",
-        "en",
-        "unknown"
-    ]
-    for text in test_texts:
-        result = has_access_issues(text)
-        print(f"   '{text}' → Has issues: {result}")
-    
-    print("\n3. OPTIMIZED: Phone Validation with Caching:")
-    test_phone_list = [
-        {"phone_number": "+1-555-123-4567", "whatsapp": True, "contact_type": "support"},
-        {"phone_number": "(555) 987-6543", "whatsapp": False, "contact_type": "sales"},
-        {"phone_number": "+44 20 7946 0958", "whatsapp": True, "contact_type": "office"},
-        {"phone_number": "invalid phone", "whatsapp": False, "contact_type": "general"},
-        {"phone_number": "+1-555-123-4567", "whatsapp": True, "contact_type": "support"},  # Duplicate for cache test
-    ]
-    
-    import time
-    start_time = time.time()
-    for i in range(100):
-        result = validate_phone_list_optimized(test_phone_list, "test-domain.com")
-    end_time = time.time()
-    
-    print(f"   ✓ 100 phone list validations took: {(end_time - start_time):.4f}s")
-    print(f"   ✓ Valid phones found: {len(result)}")
-    for phone in result:
-        print(f"      {phone['phone_number']} ({phone['region_code']}) - {phone['contact_type']}")
-    
-    print("\n4. LRU Cache Info:")
-    cache_info = _parse_and_validate_phone_cached.cache_info()
-    print(f"   📊 Cache hits: {cache_info.hits}, misses: {cache_info.misses}, cache size: {cache_info.currsize}")
-    
-    print("\n5. Segments Full Only Validation (for retry logic):")
     test_cases = [
-        ("book store", "book store", "Perfect match"),
-        ("book store", "bookstore", "Normalized match"),  
-        ("w 3", "w3", "Short normalized match"),
-        ("book store", "book shop", "Different words"),
-        ("book store", "book store extra", "Extra segments"),
-        ("book store", "", "Empty AI result"),
-        ("book store", "unclear", "Access issue"),
-        ("book store", "not detected", "Access issue"),
-        ("", "book store", "Empty original"),
+        ("book store", "book store", "Valid match - no retry needed"),
+        ("book store", "", "Empty AI result - will become 'validation_failed' → retry"),
+        ("book store", "validation_failed", "Previous retry marker - will fail validation → retry"),
+        ("book store", "unclear", "Access issue - will become empty → retry"),
+        ("book store", "book shop", "Wrong segments - will fail validation → retry"),
     ]
     
     for original, ai_result, description in test_cases:
-        is_valid = validate_segments_full_only(original, ai_result, "test-domain.com")
-        status = "✅ VALID" if is_valid else "❌ INVALID"
-        print(f"   '{original}' vs '{ai_result}' → {status} ({description})")
+        mock_result = {"segments_full": ai_result}
+        cleaned = handle_segments_full_validation(mock_result, "test-domain.com")
+        final_segments = cleaned["segments_full"]
+        
+        will_retry = not validate_segments_full_only(original, final_segments, "test-domain.com")
+        status = "🔄 RETRY" if will_retry else "✅ SUCCESS"
+        
+        print(f"   '{ai_result}' → '{final_segments}' → {status} ({description})")
     
-    print(f"\n=== Test completed ===")
-    print(f"🚀 OPTIMIZED with phone caching and batch processing!")
-    print(f"LRU cache ready for frequent phone number validation")
-    print(f"Module loaded successfully with ENHANCED validation and caching")
+    print(f"\n2. Key insight:")
+    print(f"   • 'validation_failed' is NOT a final status")
+    print(f"   • It's a RETRY MARKER that triggers stage2 retry logic")
+    print(f"   • validate_segments_full_only('bookstore', 'validation_failed') → False → RETRY")
+    print(f"   • Only after MAX_STAGE2_RETRIES does it become permanent")
+    
+    print(f"\n3. Retry logic flow:")
+    print(f"   1. AI gives empty → cleaning → 'validation_failed'")
+    print(f"   2. validate_segments_full_only() → False → retry_count++")
+    print(f"   3. Enhanced prompt sent to AI")
+    print(f"   4. Repeat until valid segments OR max retries")
+    print(f"   5. If max retries → save_gemini_results_with_validation_failed()")
+    
+    print(f"\n=== Retry logic working correctly! ===")

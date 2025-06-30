@@ -32,7 +32,7 @@ import ipaddress
 import phonenumbers
 
 from config import ConfigManager
-from prompts.stage1_prompt_generator import generate_stage1_prompt
+from prompts.stage1_prompt_generator import generate_stage1_prompt_default, generate_stage1_prompt_short_response_retry
 from prompts.stage2_system_prompt_generator import generate_system_prompt
 from utils.proxy_config import ProxyConfig
 from utils.gemini_client import GeminiClient, create_gemini_client
@@ -40,7 +40,9 @@ from utils.mongo_operations import (
     get_domain_for_analysis, finalize_api_key_usage, get_api_key_and_proxy,
     revert_domain_status, set_domain_error_status, get_domain_segmentation_info,
     save_contact_information, save_gemini_results, save_gemini_results_with_validation_failed,
-    update_api_key_ip, needs_ip_refresh
+    update_api_key_ip, needs_ip_refresh, increment_short_response_attempts,
+    get_short_response_attempts, revert_domain_status_with_short_response_tracking,
+    reset_short_response_attempts
 )
 from utils.validation_utils import (
     has_access_issues, validate_country_code, validate_email, validate_phone_e164,
@@ -50,7 +52,8 @@ from utils.validation_utils import (
 )
 from utils.logging_config import (
     setup_all_loggers, log_success_timing, log_rate_limit, log_http_error,
-    log_stage1_issue, log_error_details, log_proxy_error
+    log_stage1_issue, log_error_details, log_proxy_error, log_short_response_with_retry_info,
+    log_stage1_request_failed_with_reason, log_short_response_max_attempts
 )
 from utils.network_error_classifier import (
     ErrorType, ErrorDetails, classify_exception, is_proxy_error
@@ -113,7 +116,6 @@ payload_errors_logger = all_loggers['payload_errors']
 unknown_errors_logger = all_loggers['unknown_errors']
 ip_usage_logger = all_loggers['ip_usage']
 revert_reasons_logger = all_loggers['revert_reasons']
-short_response_debug_logger = all_loggers['short_response_debug']
 segmentation_validation_logger = all_loggers['segmentation_validation']
 
 def log_success_timing_wrapper(worker_id: int, stage: str, api_key: str, domain_full: str, response_time: float):
@@ -257,6 +259,8 @@ async def worker(worker_id: int, shared_mongo_client: AsyncIOMotorClient):
                 
                 segment_combined = await get_domain_segmentation_info(shared_mongo_client, domain_full)
                 
+                current_short_attempts = await get_short_response_attempts(shared_mongo_client, domain_id)
+                
                 api_key1, proxy_config1, key_record_id1, key_rec1 = await get_api_key_and_proxy(shared_mongo_client, "stage1")
                 if needs_ip_refresh(key_rec1):
                     working_proxy1, detected_ip1 = await get_current_ip_with_retry(
@@ -274,7 +278,10 @@ async def worker(worker_id: int, shared_mongo_client: AsyncIOMotorClient):
                     continue
                 
                 try:
-                    stage1_prompt = generate_stage1_prompt()
+                    if current_short_attempts > 0:
+                        stage1_prompt = generate_stage1_prompt_short_response_retry(current_short_attempts + 1)
+                    else:
+                        stage1_prompt = generate_stage1_prompt_default()
                     
                     stage1_result = await gemini_client.analyze_content(
                         domain_full, api_key1, working_proxy1, stage1_prompt, use_google_search=True
@@ -282,6 +289,28 @@ async def worker(worker_id: int, shared_mongo_client: AsyncIOMotorClient):
                     await handle_stage_result(shared_mongo_client, worker_id, "Stage1", api_key1, domain_full, working_proxy1, key_record_id1, stage1_result)
                     
                     if not stage1_result["success"] or stage1_result.get("status_code") != 200:
+                        failure_reason = "unknown_error"
+                        
+                        if stage1_result.get("status_code"):
+                            if stage1_result["status_code"] == 429:
+                                failure_reason = "HTTP_429_rate_limit"
+                            elif stage1_result["status_code"] == 401:
+                                failure_reason = "HTTP_401_unauthorized"
+                            elif stage1_result["status_code"] == 403:
+                                failure_reason = "HTTP_403_forbidden"
+                            elif stage1_result["status_code"] >= 500:
+                                failure_reason = f"HTTP_{stage1_result['status_code']}_server_error"
+                            else:
+                                failure_reason = f"HTTP_{stage1_result['status_code']}_client_error"
+                        elif stage1_result.get("error_details"):
+                            error_details = stage1_result["error_details"]
+                            failure_reason = f"{error_details.error_type.value}_{error_details.exception_class.lower()}"
+                        elif "proxy" in str(stage1_result.get("error", "")).lower():
+                            failure_reason = "proxy_connection_error"
+                        elif "timeout" in str(stage1_result.get("error", "")).lower():
+                            failure_reason = "request_timeout"
+                        
+                        log_stage1_request_failed_with_reason(worker_id, api_key1, domain_full, failure_reason, stage1_issues_logger)
                         await revert_domain_status(shared_mongo_client, domain_id, "stage1_request_failed", revert_reasons_logger)
                         continue
                     
@@ -289,33 +318,52 @@ async def worker(worker_id: int, shared_mongo_client: AsyncIOMotorClient):
                     text_response = stage1_result.get("text_response", "")
                     
                     if grounding_status == "NO_CANDIDATES":
-                        log_stage1_issue_wrapper(worker_id, api_key1, domain_full, "NO_CANDIDATES", "")
+                        log_stage1_request_failed_with_reason(worker_id, api_key1, domain_full, "no_candidates_found", stage1_issues_logger)
                         await revert_domain_status(shared_mongo_client, domain_id, "no_candidates", revert_reasons_logger)
                         continue
                     
                     if len(text_response.strip()) < 200:
                         response_lower = text_response.lower()
+                        
                         if "inaccessible" in response_lower:
-                            log_stage1_issue_wrapper(worker_id, api_key1, domain_full, "WEBSITE_INACCESSIBLE", "Short response with inaccessible")
+                            await reset_short_response_attempts(shared_mongo_client, domain_id)
+                            log_stage1_request_failed_with_reason(worker_id, api_key1, domain_full, "website_inaccessible", stage1_issues_logger)
                             await set_domain_error_status(shared_mongo_client, domain_id, "inaccessible")
                             continue
                         elif "placeholder" in response_lower:
-                            log_stage1_issue_wrapper(worker_id, api_key1, domain_full, "PLACEHOLDER_PAGE", "Short response with placeholder")
+                            await reset_short_response_attempts(shared_mongo_client, domain_id)
+                            log_stage1_request_failed_with_reason(worker_id, api_key1, domain_full, "placeholder_page", stage1_issues_logger)
                             await set_domain_error_status(shared_mongo_client, domain_id, "placeholder")
                             continue
                         else:
-                            log_stage1_issue_wrapper(worker_id, api_key1, domain_full, "SHORT_RESPONSE", f"{len(text_response)} chars")
-                            short_response_debug_logger.info(f"Domain: {domain_full} | Length: {len(text_response)} | Content: {text_response}")
-                            await revert_domain_status(shared_mongo_client, domain_id, "short_response", revert_reasons_logger)
-                            continue
+                            should_continue, attempts_count = await revert_domain_status_with_short_response_tracking(
+                                shared_mongo_client, domain_id, "short_response", revert_reasons_logger
+                            )
+                            
+                            if should_continue:
+                                log_short_response_with_retry_info(
+                                    worker_id, api_key1, domain_full, 
+                                    len(text_response), text_response.strip(), 
+                                    attempts_count, stage1_issues_logger
+                                )
+                                continue
+                            else:
+                                log_short_response_max_attempts(
+                                    worker_id, api_key1, domain_full, 
+                                    attempts_count, stage1_issues_logger
+                                )
+                                continue
+                    else:
+                        if current_short_attempts > 0:
+                            await reset_short_response_attempts(shared_mongo_client, domain_id)
                     
                     if grounding_status == "URL_RETRIEVAL_STATUS_ERROR":
-                        log_stage1_issue_wrapper(worker_id, api_key1, domain_full, "URL_RETRIEVAL_ERROR", "")
+                        log_stage1_request_failed_with_reason(worker_id, api_key1, domain_full, "url_retrieval_error", stage1_issues_logger)
                         await revert_domain_status(shared_mongo_client, domain_id, "url_retrieval_error", revert_reasons_logger)
                         continue
                     
                     if grounding_status == "NON_JSON_RESPONSE":
-                        log_stage1_issue_wrapper(worker_id, api_key1, domain_full, "NON_JSON_RESPONSE", "API returned HTML")
+                        log_stage1_request_failed_with_reason(worker_id, api_key1, domain_full, "non_json_response", stage1_issues_logger)
                         await revert_domain_status(shared_mongo_client, domain_id, "non_json_response", revert_reasons_logger)
                         continue
                     
@@ -326,6 +374,9 @@ async def worker(worker_id: int, shared_mongo_client: AsyncIOMotorClient):
                     is_proxy_err = error_details.error_type == ErrorType.PROXY
                     await finalize_api_key_usage(shared_mongo_client, key_record_id1, None, is_proxy_err, working_proxy1)
                     logger.error(f"Worker {worker_id}: Stage1 {error_details.exception_class} with {working_proxy1.connection_string}: {stage1_exception}")
+                    
+                    exception_reason = f"exception_{error_details.exception_class.lower()}"
+                    log_stage1_request_failed_with_reason(worker_id, api_key1, domain_full, exception_reason, stage1_issues_logger)
                     await revert_domain_status(shared_mongo_client, domain_id, f"stage1_exception:{error_details.exception_class}", revert_reasons_logger)
                     continue
                 
@@ -451,6 +502,7 @@ async def main():
             print(f"🔄 Retry model: {stage2_retry_model} (used for Stage2 retries)")
         print(f"⏱️  Request interval: {START_DELAY_MS}ms between requests")
         print(f"🔧 Max concurrent starts: {max_concurrent_starts}")
+        print(f"🔄 Short response retry: Up to 5 attempts with enhanced prompts")
         
         shared_mongo_client = AsyncIOMotorClient(API_DB_URI, **CLIENT_PARAMS)
         

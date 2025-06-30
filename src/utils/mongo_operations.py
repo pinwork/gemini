@@ -55,11 +55,9 @@ DOMAIN_WAIT_TIME = 60
 logger = logging.getLogger("mongo_operations")
 
 def get_mongo_config() -> dict:
-    """Отримує MongoDB конфігурацію через ConfigManager"""
     return ConfigManager.get_mongo_config()
 
 def get_script_config() -> dict:
-    """Отримує конфігурацію скрипта через ConfigManager"""
     return ConfigManager.get_script_config()
 
 MONGO_CONFIG = get_mongo_config()
@@ -230,6 +228,146 @@ async def finalize_api_key_usage(mongo_client: AsyncIOMotorClient, key_record_id
     wait=wait_exponential(multiplier=1, min=1, max=RETRY_DELAY),
     reraise=True
 )
+async def increment_short_response_attempts(mongo_client: AsyncIOMotorClient, domain_id: str) -> int:
+    try:
+        db_name = MONGO_CONFIG["databases"]["main_db"]["name"]
+        collection_name = MONGO_CONFIG["databases"]["main_db"]["collections"]["domain_main"]
+        
+        domain_collection = mongo_client[db_name][collection_name]
+        
+        result = await domain_collection.find_one_and_update(
+            {"_id": ObjectId(domain_id)},
+            {
+                "$inc": {"short_response_attempts": 1},
+                "$set": {"updated_at": get_timestamp_ms()}
+            },
+            return_document=ReturnDocument.AFTER
+        )
+        
+        if result:
+            return result.get("short_response_attempts", 1)
+        else:
+            logger.warning(f"Could not increment short_response_attempts for domain_id: {domain_id}")
+            return 1
+            
+    except Exception as e:
+        logger.error(f"Error incrementing short_response_attempts: {e}")
+        return 1
+
+@retry(
+    retry=retry_if_exception_type(MONGODB_ERRORS),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=1, max=RETRY_DELAY),
+    reraise=True
+)
+async def get_short_response_attempts(mongo_client: AsyncIOMotorClient, domain_id: str) -> int:
+    try:
+        db_name = MONGO_CONFIG["databases"]["main_db"]["name"]
+        collection_name = MONGO_CONFIG["databases"]["main_db"]["collections"]["domain_main"]
+        
+        domain_collection = mongo_client[db_name][collection_name]
+        
+        domain_record = await domain_collection.find_one(
+            {"_id": ObjectId(domain_id)},
+            {"short_response_attempts": 1}
+        )
+        
+        if domain_record:
+            return domain_record.get("short_response_attempts", 0)
+        else:
+            return 0
+            
+    except Exception as e:
+        logger.error(f"Error getting short_response_attempts: {e}")
+        return 0
+
+@retry(
+    retry=retry_if_exception_type(MONGODB_ERRORS),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=1, max=RETRY_DELAY),
+    reraise=True
+)
+async def revert_domain_status_with_short_response_tracking(mongo_client: AsyncIOMotorClient, domain_id: str, 
+                                                          reason: str = "", 
+                                                          revert_logger: Optional[logging.Logger] = None) -> Tuple[bool, int]:
+    try:
+        db_name = MONGO_CONFIG["databases"]["main_db"]["name"]
+        collection_name = MONGO_CONFIG["databases"]["main_db"]["collections"]["domain_main"]
+        
+        domain_collection = mongo_client[db_name][collection_name]
+        
+        current_attempts = await increment_short_response_attempts(mongo_client, domain_id)
+        
+        if current_attempts >= 5:
+            await domain_collection.update_one(
+                {"_id": ObjectId(domain_id)},
+                {
+                    "$set": {
+                        "status": "processed_gemini_error",
+                        "error": "short_response",
+                        "updated_at": get_timestamp_ms()
+                    }
+                }
+            )
+            
+            if revert_logger:
+                revert_logger.info(f"Domain ID: {domain_id} | Reason: short_response_max_attempts_reached | Attempts: {current_attempts}")
+            
+            return False, current_attempts
+        else:
+            result = await domain_collection.update_one(
+                {"_id": ObjectId(domain_id)},
+                {
+                    "$set": {
+                        "status": "processed",
+                        "updated_at": get_timestamp_ms()
+                    },
+                    "$inc": {"url_context_try": -1}
+                }
+            )
+            
+            if result.modified_count > 0:
+                if revert_logger:
+                    revert_logger.info(f"Domain ID: {domain_id} | Reason: {reason} | Attempts: {current_attempts}/5")
+            else:
+                logger.warning(f"Could not revert status for domain_id: {domain_id}")
+            
+            return True, current_attempts
+            
+    except Exception as e:
+        logger.error(f"Error in revert_domain_status_with_short_response_tracking: {e}")
+        return False, 1
+
+@retry(
+    retry=retry_if_exception_type(MONGODB_ERRORS),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=1, max=RETRY_DELAY),
+    reraise=True
+)
+async def reset_short_response_attempts(mongo_client: AsyncIOMotorClient, domain_id: str) -> None:
+    try:
+        db_name = MONGO_CONFIG["databases"]["main_db"]["name"]
+        collection_name = MONGO_CONFIG["databases"]["main_db"]["collections"]["domain_main"]
+        
+        domain_collection = mongo_client[db_name][collection_name]
+        
+        await domain_collection.update_one(
+            {"_id": ObjectId(domain_id)},
+            {
+                "$unset": {"short_response_attempts": ""},
+                "$set": {"updated_at": get_timestamp_ms()}
+            }
+        )
+            
+    except Exception as e:
+        logger.error(f"Error resetting short_response_attempts: {e}")
+
+@retry(
+    retry=retry_if_exception_type(MONGODB_ERRORS),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=1, max=RETRY_DELAY),
+    reraise=True
+)
 async def revert_domain_status(mongo_client: AsyncIOMotorClient, domain_id: str, 
                               reason: str = "", revert_logger: Optional[logging.Logger] = None) -> None:
     try:
@@ -325,7 +463,6 @@ async def get_domain_segmentation_info(mongo_client: AsyncIOMotorClient, domain_
     reraise=True
 )
 async def save_contact_information(mongo_client: AsyncIOMotorClient, domain_full: str, gemini_result: dict) -> None:
-    """ОПТИМІЗОВАНА версія з batch operations"""
     try:
         db_name = MONGO_CONFIG["databases"]["main_db"]["name"]
         
@@ -531,14 +668,21 @@ async def save_gemini_results(mongo_client: AsyncIOMotorClient, domain_full: str
         if segments_full:
             if segments_full == "validation_failed":
                 segmentation_update["segments_full"] = segments_full
+                segmentation_update["segments_full_count"] = 0
+                if segmentation_logger:
+                    segmentation_logger.info(f"Domain {domain_full}: Final 'validation_failed' saved after exhausting all stage2 retries")
             elif not segment_combined:
                 segmentation_update["segments_full"] = segments_full
+                segments_count = len(segments_full.split()) if segments_full.strip() else 0
+                segmentation_update["segments_full_count"] = segments_count
             else:
                 original_normalized = _segments_norm(segment_combined)
                 ai_normalized = _segments_norm(segments_full)
                 
                 if original_normalized == ai_normalized:
                     segmentation_update["segments_full"] = segments_full
+                    segments_count = len(segments_full.split()) if segments_full.strip() else 0
+                    segmentation_update["segments_full_count"] = segments_count
                     
                     if segments_primary:
                         segmentation_update["segments_primary"] = segments_primary
@@ -578,7 +722,6 @@ async def save_gemini_results(mongo_client: AsyncIOMotorClient, domain_full: str
             )
     except Exception as e:
         logger.error(f"Error updating domain_segmented collection for {domain_full}: {e}")
-
 
 async def save_gemini_results_with_validation_failed(mongo_client: AsyncIOMotorClient, domain_full: str, 
                                                    gemini_result: dict, grounding_status: str, domain_id: str, 
@@ -634,7 +777,7 @@ async def update_api_key_ip(mongo_client: AsyncIOMotorClient, key_id: str, ip: s
         return False
 
 if __name__ == "__main__":
-    print("=== Optimized MongoDB Operations Module Test ===\n")
+    print("=== MongoDB Operations - Retry Logic Clarification ===\n")
     
     print("✅ MongoDB Operations Module loaded successfully with OPTIMIZED FEATURES")
     print(f"📁 Using ConfigManager for all configurations")
@@ -658,26 +801,30 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"❌ Config loading failed: {e}")
     
-    print("\n📋 Available Functions (ALL with automatic retries + ConfigManager integration):")
+    print("\n📋 Available Functions:")
     functions = [
         "get_domain_for_analysis",
-        "get_api_key_and_proxy (now uses ConfigManager cooldowns)", 
+        "get_api_key_and_proxy", 
         "finalize_api_key_usage",
+        "increment_short_response_attempts",
+        "get_short_response_attempts",
+        "revert_domain_status_with_short_response_tracking",
+        "reset_short_response_attempts",
         "revert_domain_status",
         "set_domain_error_status",
         "get_domain_segmentation_info",
-        "save_contact_information (OPTIMIZED with batch operations)", 
-        "save_gemini_results",
+        "save_contact_information", 
+        "save_gemini_results (with segments_full_count)",
         "save_gemini_results_with_validation_failed",
-        "update_api_key_ip",
-        "retry_mongo_operation"
+        "update_api_key_ip"
     ]
     
     for func in functions:
         print(f"   ✓ {func}")
     
-    print(f"\n🚀 OPTIMIZATIONS IMPLEMENTED:")
-    print(f"   ✓ save_contact_information() -> uses batch insert_many() instead of loops")
-    print(f"   ✓ Lazy logging throughout the module")
-    print(f"   ✓ ConfigManager throttling integration")
-    print(f"   ✓ Optimized phone validation via validation_utils")
+    print(f"\n🔄 Retry Logic Clarification:")
+    print(f"   • 'validation_failed' in segments_full is a RETRY MARKER, not final status")
+    print(f"   • It triggers stage2 retry logic in main.py")
+    print(f"   • Only becomes permanent after MAX_STAGE2_RETRIES exhausted")
+    print(f"   • segments_full_count = 0 for 'validation_failed' entries")
+    print(f"   • Proper count calculated only for validated segments")

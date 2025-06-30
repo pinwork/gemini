@@ -84,15 +84,13 @@ stage1_text_fields = {
     "address_list": "Extract all physical addresses found on website for office visits or mailing. Return as array with format: full_address (complete address as found), address_type (single industry-standard word: headquarters, office, branch, warehouse, store, etc.), country (ISO 2-letter code)"
 }
 
-
 def apply_stage1_word_variations(text: str) -> str:
     for word, variations in stage1_word_variations.items():
         if word in text:
             text = text.replace(f"{{{word}}}", random.choice(variations))
     return text
 
-
-def generate_stage1_prompt() -> str:
+def generate_stage1_prompt(retry_short_response: bool = False, attempt_number: int = 0) -> str:
     intro_text = " ".join(stage1_base_intro)
     intro_with_variations = apply_stage1_word_variations(intro_text)
     
@@ -124,6 +122,18 @@ def generate_stage1_prompt() -> str:
         "If summary is the most detailed description and similarity_search_phrases break down all summary details into compact form ideal for vector search, then vector_search_phrase is perfectly distilled essence from summary."
     ]
     
+    if retry_short_response and attempt_number > 0:
+        retry_warning = [
+            f"\n=== CRITICAL RETRY WARNING (Attempt #{attempt_number}/5) ===",
+            "ATTENTION: Your previous response was too short and unacceptable!",
+            "You MUST provide one of exactly 3 response types:",
+            "1. 'Website inaccessible' - if the website cannot be accessed or loaded",
+            "2. 'Placeholder page' - if this is a temporary, parked, maintenance, or placeholder page",
+            "3. COMPLETE DETAILED ANALYSIS - if the website is functional and can be analyzed",
+            "Provide either a clear access issue statement OR a comprehensive business analysis."
+        ]
+        final_instructions.extend(retry_warning)
+    
     full_prompt = "\n".join([
         intro_with_variations,
         *analysis_sections,
@@ -132,6 +142,11 @@ def generate_stage1_prompt() -> str:
     
     return full_prompt
 
+def generate_stage1_prompt_default() -> str:
+    return generate_stage1_prompt(retry_short_response=False, attempt_number=0)
+
+def generate_stage1_prompt_short_response_retry(attempt_number: int) -> str:
+    return generate_stage1_prompt(retry_short_response=True, attempt_number=attempt_number)
 
 if __name__ == "__main__":
     prompt = generate_stage1_prompt()

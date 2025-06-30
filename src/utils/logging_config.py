@@ -29,9 +29,7 @@ class ErrorDetails:
     api_key_consumed: bool
     suggested_action: str
 
-
 class LazyLogFormatter:
-    """Wrapper для lazy string formatting в логуванні"""
     def __init__(self, func: Callable, *args, **kwargs):
         self.func = func
         self.args = args
@@ -39,7 +37,6 @@ class LazyLogFormatter:
     
     def __str__(self):
         return self.func(*self.args, **self.kwargs)
-
 
 def configure_logging() -> logging.Logger:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -58,7 +55,6 @@ def configure_logging() -> logging.Logger:
     logger.addHandler(file_handler)
     return logger
 
-
 def configure_segmentation_validation_logging() -> logging.Logger:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     seg_val_file = LOG_DIR / "ai_segmentation_validation.log"
@@ -76,7 +72,6 @@ def configure_segmentation_validation_logging() -> logging.Logger:
     seg_val_logger.addHandler(handler)
     return seg_val_logger
 
-
 def configure_success_timing_logging() -> logging.Logger:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     success_log_file = LOG_DIR / "success_timing.log"
@@ -91,7 +86,6 @@ def configure_success_timing_logging() -> logging.Logger:
     success_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
     success_logger.addHandler(success_file_handler)
     return success_logger
-
 
 def configure_rate_limits_logging() -> logging.Logger:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -108,7 +102,6 @@ def configure_rate_limits_logging() -> logging.Logger:
     rate_limits_logger.addHandler(rate_limits_file_handler)
     return rate_limits_logger
 
-
 def configure_http_errors_logging() -> logging.Logger:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     http_errors_log_file = LOG_DIR / "http_errors.log"
@@ -123,7 +116,6 @@ def configure_http_errors_logging() -> logging.Logger:
     http_errors_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
     http_errors_logger.addHandler(http_errors_file_handler)
     return http_errors_logger
-
 
 def configure_stage1_issues_logging() -> logging.Logger:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -140,7 +132,6 @@ def configure_stage1_issues_logging() -> logging.Logger:
     stage1_issues_logger.addHandler(stage1_issues_file_handler)
     return stage1_issues_logger
 
-
 def configure_stage2_retries_logging() -> logging.Logger:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     stage2_retries_log_file = LOG_DIR / "stage2_retries.log"
@@ -155,7 +146,6 @@ def configure_stage2_retries_logging() -> logging.Logger:
     stage2_retries_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
     stage2_retries_logger.addHandler(stage2_retries_file_handler)
     return stage2_retries_logger
-
 
 def configure_proxy_errors_logging() -> logging.Logger:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -172,7 +162,6 @@ def configure_proxy_errors_logging() -> logging.Logger:
     proxy_errors_logger.addHandler(proxy_errors_file_handler)
     return proxy_errors_logger
 
-
 def configure_network_errors_logging() -> logging.Logger:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     network_errors_log_file = LOG_DIR / "network_errors.log"
@@ -187,7 +176,6 @@ def configure_network_errors_logging() -> logging.Logger:
     network_errors_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
     network_errors_logger.addHandler(network_errors_file_handler)
     return network_errors_logger
-
 
 def configure_api_errors_logging() -> logging.Logger:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -204,7 +192,6 @@ def configure_api_errors_logging() -> logging.Logger:
     api_errors_logger.addHandler(api_errors_file_handler)
     return api_errors_logger
 
-
 def configure_payload_errors_logging() -> logging.Logger:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     payload_errors_log_file = LOG_DIR / "payload_errors.log"
@@ -219,7 +206,6 @@ def configure_payload_errors_logging() -> logging.Logger:
     payload_errors_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
     payload_errors_logger.addHandler(payload_errors_file_handler)
     return payload_errors_logger
-
 
 def configure_unknown_errors_logging() -> logging.Logger:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -236,7 +222,6 @@ def configure_unknown_errors_logging() -> logging.Logger:
     unknown_errors_logger.addHandler(unknown_errors_file_handler)
     return unknown_errors_logger
 
-
 def configure_revert_reasons_logging() -> logging.Logger:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     revert_reasons_log_file = LOG_DIR / "revert_reasons.log"
@@ -252,23 +237,6 @@ def configure_revert_reasons_logging() -> logging.Logger:
     revert_reasons_logger.addHandler(revert_reasons_file_handler)
     return revert_reasons_logger
 
-
-def configure_short_response_debug_logging() -> logging.Logger:
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    short_response_debug_log_file = LOG_DIR / "short_response_debug.log"
-    short_response_debug_logger = logging.getLogger("short_response_debug")
-    short_response_debug_logger.handlers = []
-    short_response_debug_logger.setLevel(logging.INFO)
-    short_response_debug_logger.propagate = False
-    short_response_debug_file_handler = logging.handlers.RotatingFileHandler(
-        short_response_debug_log_file, maxBytes=10*1024*1024, backupCount=5, encoding="utf-8"
-    )
-    short_response_debug_file_handler.setLevel(logging.INFO)
-    short_response_debug_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
-    short_response_debug_logger.addHandler(short_response_debug_file_handler)
-    return short_response_debug_logger
-
-
 def configure_ip_usage_logging() -> logging.Logger:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     ip_usage_log_file = LOG_DIR / "ip_usage.log"
@@ -283,7 +251,6 @@ def configure_ip_usage_logging() -> logging.Logger:
     ip_usage_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
     ip_usage_logger.addHandler(ip_usage_file_handler)
     return ip_usage_logger
-
 
 def setup_all_loggers() -> Dict[str, logging.Logger]:
     loggers = {
@@ -301,26 +268,19 @@ def setup_all_loggers() -> Dict[str, logging.Logger]:
         'unknown_errors': configure_unknown_errors_logging(),
         'ip_usage': configure_ip_usage_logging(),
         'revert_reasons': configure_revert_reasons_logging(),
-        'short_response_debug': configure_short_response_debug_logging(),
     }
     
     logging.getLogger('aiohttp.client').setLevel(logging.WARNING)
     
     return loggers
 
-
 def _format_masked_key(api_key: str) -> str:
-    """Утилітарна функція для маскування API ключа"""
     return f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
 
-
 def _format_short_domain(domain_full: str) -> str:
-    """Утилітарна функція для скорочення домену"""
     return domain_full[:60] + "..." if len(domain_full) > 60 else domain_full
 
-
 def log_success_timing(worker_id: int, stage: str, api_key: str, domain_full: str, response_time: float, success_timing_logger: logging.Logger):
-    """Оптимізована версія з lazy formatting"""
     if not success_timing_logger.isEnabledFor(logging.INFO):
         return
     
@@ -331,9 +291,7 @@ def log_success_timing(worker_id: int, stage: str, api_key: str, domain_full: st
     
     success_timing_logger.info(LazyLogFormatter(format_message))
 
-
 def log_rate_limit(worker_id: int, stage: str, api_key: str, domain_full: str, freeze_minutes: int, rate_limits_logger: logging.Logger):
-    """Оптимізована версія з lazy formatting"""
     if not rate_limits_logger.isEnabledFor(logging.INFO):
         return
     
@@ -344,9 +302,7 @@ def log_rate_limit(worker_id: int, stage: str, api_key: str, domain_full: str, f
     
     rate_limits_logger.info(LazyLogFormatter(format_message))
 
-
 def log_http_error(worker_id: int, stage: str, api_key: str, domain_full: str, status_code: int, error_msg: str, http_errors_logger: logging.Logger):
-    """Оптимізована версія з lazy formatting"""
     if not http_errors_logger.isEnabledFor(logging.INFO):
         return
     
@@ -358,22 +314,74 @@ def log_http_error(worker_id: int, stage: str, api_key: str, domain_full: str, s
     
     http_errors_logger.info(LazyLogFormatter(format_message))
 
-
-def log_stage1_issue(worker_id: int, api_key: str, domain_full: str, issue_type: str, stage1_issues_logger: logging.Logger, details: str = ""):
-    """Оптимізована версія з lazy formatting"""
+def log_stage1_issue_enhanced(worker_id: int, api_key: str, domain_full: str, issue_type: str, 
+                             stage1_issues_logger: logging.Logger, details: str = "", 
+                             attempt_info: str = "", content_preview: str = "", 
+                             response_length: int = 0):
     if not stage1_issues_logger.isEnabledFor(logging.INFO):
         return
     
     def format_message():
         masked_key = _format_masked_key(api_key)
         short_domain = _format_short_domain(domain_full)
-        return f"Worker-{worker_id:02d} | {issue_type} | Key: {masked_key} | {short_domain} | {details}"
+        
+        if issue_type == "short_response":
+            content_safe = repr(content_preview) if content_preview else '""'
+            return (f"Worker-{worker_id:02d} | {issue_type} | Key: {masked_key} | {short_domain} | "
+                   f"Attempt: {attempt_info} | Length: {response_length} chars | Content: {content_safe}")
+        
+        elif issue_type == "stage1_request_failed":
+            specific_reason = details if details else "unknown_error"
+            return (f"Worker-{worker_id:02d} | {issue_type} | Key: {masked_key} | {short_domain} | "
+                   f"Reason: {specific_reason}")
+        
+        else:
+            details_part = f" | {details}" if details else ""
+            return (f"Worker-{worker_id:02d} | {issue_type} | Key: {masked_key} | {short_domain}{details_part}")
     
     stage1_issues_logger.info(LazyLogFormatter(format_message))
 
+def log_short_response_with_retry_info(worker_id: int, api_key: str, domain_full: str, 
+                                      response_length: int, content_preview: str, 
+                                      current_attempt: int, stage1_issues_logger: logging.Logger):
+    attempt_info = f"{current_attempt}/5"
+    log_stage1_issue_enhanced(
+        worker_id=worker_id,
+        api_key=api_key,
+        domain_full=domain_full,
+        issue_type="short_response",
+        stage1_issues_logger=stage1_issues_logger,
+        attempt_info=attempt_info,
+        content_preview=content_preview,
+        response_length=response_length
+    )
+
+def log_stage1_request_failed_with_reason(worker_id: int, api_key: str, domain_full: str, 
+                                         failure_reason: str, stage1_issues_logger: logging.Logger):
+    log_stage1_issue_enhanced(
+        worker_id=worker_id,
+        api_key=api_key,
+        domain_full=domain_full,
+        issue_type="stage1_request_failed",
+        stage1_issues_logger=stage1_issues_logger,
+        details=failure_reason
+    )
+
+def log_short_response_max_attempts(worker_id: int, api_key: str, domain_full: str, 
+                                   total_attempts: int, stage1_issues_logger: logging.Logger):
+    log_stage1_issue_enhanced(
+        worker_id=worker_id,
+        api_key=api_key,
+        domain_full=domain_full,
+        issue_type="short_response_max_attempts",
+        stage1_issues_logger=stage1_issues_logger,
+        details=f"Reached maximum {total_attempts} attempts, setting error status"
+    )
+
+def log_stage1_issue(worker_id: int, api_key: str, domain_full: str, issue_type: str, stage1_issues_logger: logging.Logger, details: str = ""):
+    log_stage1_issue_enhanced(worker_id, api_key, domain_full, issue_type, stage1_issues_logger, details)
 
 def log_stage2_retry(worker_id: int, api_key: str, domain_full: str, retry_count: int, segments_full: str, stage2_retries_logger: logging.Logger):
-    """Оптимізована версія з lazy formatting"""
     if not stage2_retries_logger.isEnabledFor(logging.INFO):
         return
     
@@ -385,13 +393,11 @@ def log_stage2_retry(worker_id: int, api_key: str, domain_full: str, retry_count
     
     stage2_retries_logger.info(LazyLogFormatter(format_message))
 
-
 def log_error_details(worker_id: int, stage: str, api_key: str, domain_full: str, 
                      error_details: ErrorDetails, response_time: float,
                      proxy_errors_logger: logging.Logger, network_errors_logger: logging.Logger,
                      api_errors_logger: logging.Logger, payload_errors_logger: logging.Logger,
                      unknown_errors_logger: logging.Logger):
-    """Оптимізована версія з lazy formatting"""
     
     def format_message():
         masked_key = _format_masked_key(api_key)
@@ -420,9 +426,7 @@ def log_error_details(worker_id: int, stage: str, api_key: str, domain_full: str
         if unknown_errors_logger.isEnabledFor(logging.INFO):
             unknown_errors_logger.info(LazyLogFormatter(format_message))
 
-
 def log_proxy_error(worker_id: int, stage: str, proxy_config, domain_full: str, error_msg: str, proxy_errors_logger: logging.Logger):
-    """Оптимізована версія з lazy formatting"""
     if not proxy_errors_logger.isEnabledFor(logging.INFO):
         return
     
@@ -432,7 +436,6 @@ def log_proxy_error(worker_id: int, stage: str, proxy_config, domain_full: str, 
         return f"Worker-{worker_id:02d} | {stage:6s} | {proxy_config.connection_string} | {short_domain} | {short_error}"
     
     proxy_errors_logger.info(LazyLogFormatter(format_message))
-
 
 if __name__ == "__main__":
     print("=== Optimized Logging Configuration Test Suite ===\n")
