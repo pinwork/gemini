@@ -283,8 +283,10 @@ class GeminiClient:
                             api_key: str, 
                             proxy_config: ProxyConfig,
                             stage1_prompt: str,
-                            use_google_search: bool = True) -> dict:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.stage1_model}:generateContent?key={api_key}"
+                            use_google_search: bool = True,
+                            model_override: Optional[str] = None) -> dict:
+        model_to_use = model_override or self.stage1_model
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_to_use}:generateContent?key={api_key}"
         payload = self._build_stage1_payload(domain_full, stage1_prompt, use_google_search)
         
         start_time = asyncio.get_event_loop().time()
@@ -379,8 +381,14 @@ class GeminiClient:
                              api_key: str, 
                              proxy_config: ProxyConfig,
                              system_prompt: str,
-                             use_retry_model: bool = False) -> dict:
-        model_to_use = self.stage2_retry_model if use_retry_model else self.stage2_model
+                             use_retry_model: bool = False,
+                             model_override: Optional[str] = None,
+                             retry_model_override: Optional[str] = None) -> dict:
+        if use_retry_model:
+            model_to_use = retry_model_override or self.stage2_retry_model
+        else:
+            model_to_use = model_override or self.stage2_model
+        
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_to_use}:generateContent?key={api_key}"
         payload = self._build_stage2_payload(domain_full, text_content, system_prompt)
         
@@ -532,7 +540,8 @@ class GeminiClient:
                 "current_delay_ms": current_delay,
                 "max_concurrent_starts": max_concurrent_starts
             },
-            "rollback_features": ["GLOBAL_LIMIT_detection", "429_classification"]  # NEW: Rollback feature tracking
+            "rollback_features": ["GLOBAL_LIMIT_detection", "429_classification"],  # NEW: Rollback feature tracking
+            "model_rotation": ["stage1_rotation", "stage2_rotation", "retry_single"]  # NEW: Model rotation tracking
         }
 
 
@@ -569,7 +578,7 @@ if __name__ == "__main__":
     import sys
     
     async def test_with_mongo_credentials():
-        print("=== Gemini Client with GLOBAL_LIMIT Rollback Test ===\n")
+        print("=== Gemini Client with MODEL ROTATION Test ===\n")
         
         try:
             from mongo_operations import get_api_key_and_proxy
@@ -642,7 +651,7 @@ if __name__ == "__main__":
             print(f"❌ Proxy config error: {e}")
             return None, None
     
-    async def run_enhanced_gemini_test(api_key, proxy_config):
+    async def run_model_rotation_test(api_key, proxy_config):
         try:
             schema_path = Path(__file__).parent.parent.parent / "config" / "stage2_schema.json"
             with schema_path.open("r", encoding="utf-8") as f:
@@ -653,7 +662,7 @@ if __name__ == "__main__":
             schema = {}
         
         client = create_gemini_client(schema, start_delay_ms=500)
-        print(f"✓ GeminiClient created with GLOBAL_LIMIT rollback support")
+        print(f"✓ GeminiClient created with MODEL ROTATION support")
         
         max_concurrent = get_max_concurrent_starts()
         current_delay = get_current_delay_ms()
@@ -666,145 +675,76 @@ if __name__ == "__main__":
         print(f"\n🔍 Testing domain: {test_domain}")
         print("=" * 70)
         
-        print(f"\n📖 STAGE 1 - Content Analysis with Enhanced 429 Classification:")
+        print(f"\n📖 STAGE 1 - Content Analysis with MODEL ROTATION:")
         print("-" * 50)
         
-        try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{client.stage1_model}:generateContent?key={api_key}"
-            payload = client._build_stage1_payload(test_domain, stage1_prompt)
+        # Test multiple requests to see model rotation
+        test_models = ["gemini-2.5-flash", "gemini-2.5-flash-preview-04-17", "gemini-2.5-flash-preview-05-20"]
+        
+        for i, test_model in enumerate(test_models):
+            print(f"\nRequest {i+1} with model override: {test_model}")
             
-            print("🔧 Making enhanced Stage1 request...")
-            start_time = asyncio.get_event_loop().time()
-            
-            response, resp_data = await client._make_request(
-                proxy_config, url, payload, "stage1"
-            )
-            
-            end_time = asyncio.get_event_loop().time()
-            response_time = end_time - start_time
-            
-            print(f"Status: {'✓ SUCCESS' if response.status == 200 else '❌ FAILED'}")
-            print(f"Response time: {response_time:.2f}s")
-            print(f"Status code: {response.status}")
-            
-            # Test enhanced 429 classification
-            if response.status == 429 and isinstance(resp_data, dict):
-                limit_type = client.classify_429_error(resp_data)
-                print(f"🎯 NEW: 429 Classification: {limit_type}")
-                if limit_type == "GLOBAL_LIMIT":
-                    print(f"🔄 NEW: This would trigger api_last_used_date ROLLBACK (6 min backward)")
-                elif limit_type == "PERSONAL_QUOTA":
-                    print(f"⏳ This would trigger normal cooldown (6 min forward)")
-                print(f"📄 Raw 429 response: {json.dumps(resp_data, indent=2)}")
-            
-            if response.status == 200 and isinstance(resp_data, dict):
-                print(f"\n📄 RAW STAGE1 RESPONSE (Full API Response):")
-                print("=" * 60)
-                print(json.dumps(resp_data, indent=2, ensure_ascii=False))
-                print("=" * 60)
+            try:
+                stage1_result = await client.analyze_content(
+                    test_domain, api_key, proxy_config, stage1_prompt, 
+                    use_google_search=True, model_override=test_model
+                )
                 
-                candidates = resp_data.get("candidates", [])
-                if candidates:
-                    candidate = candidates[0]
-                    text_response = candidate.get("content", {}).get("parts", [{}])[0].get("text", "")
-                    url_metadata = candidate.get("urlContextMetadata", {}).get("urlMetadata", [])
-                    grounding_status = url_metadata[0].get("urlRetrievalStatus", "UNKNOWN") if url_metadata else "NO_URL_METADATA"
-                    
-                    print(f"🎯 Grounding status: {grounding_status}")
-                    
+                print(f"Status: {'✓ SUCCESS' if stage1_result.get('success') else '❌ FAILED'}")
+                print(f"Response time: {stage1_result.get('response_time', 0):.2f}s")
+                print(f"Status code: {stage1_result.get('status_code')}")
+                
+                if stage1_result.get("status_code") == 429:
+                    limit_type = stage1_result.get("limit_type", "UNKNOWN")
+                    print(f"🎯 429 Classification: {limit_type}")
+                
+                if stage1_result.get("success") and i == 0:  # Only show content for first successful request
+                    text_response = stage1_result.get("text_response", "")
                     if text_response:
-                        print(f"\n📄 EXTRACTED TEXT FROM STAGE1:")
-                        print("=" * 60)
-                        print(text_response)
-                        print("=" * 60)
+                        print(f"✓ Got text response: {len(text_response)} characters")
                         
-                        print(f"\n🧠 STAGE 2 - Business Analysis with Enhanced 429 Classification:")
+                        # Test Stage2 with model override
+                        print(f"\n🧠 STAGE 2 - Business Analysis with MODEL ROTATION:")
                         print("-" * 50)
                         
                         system_prompt = """You are a website analyzer. Analyze the provided content and return structured business information in JSON format according to the provided schema."""
                         
-                        try:
-                            url = f"https://generativelanguage.googleapis.com/v1beta/models/{client.stage2_model}:generateContent?key={api_key}"
-                            payload = client._build_stage2_payload(test_domain, text_response, system_prompt)
-                            
-                            print("🔧 Making enhanced Stage2 request...")
-                            start_time = asyncio.get_event_loop().time()
-                            
-                            response, resp_data = await client._make_request(
-                                proxy_config, url, payload, "stage2", 90
-                            )
-                            
-                            end_time = asyncio.get_event_loop().time()
-                            response_time = end_time - start_time
-                            
-                            print(f"Status: {'✓ SUCCESS' if response.status == 200 else '❌ FAILED'}")
-                            print(f"Response time: {response_time:.2f}s")
-                            print(f"Status code: {response.status}")
-                            
-                            # Test enhanced 429 classification
-                            if response.status == 429 and isinstance(resp_data, dict):
-                                limit_type = client.classify_429_error(resp_data)
-                                print(f"🎯 NEW: 429 Classification: {limit_type}")
-                                if limit_type == "GLOBAL_LIMIT":
-                                    print(f"🔄 NEW: This would trigger api_last_used_date ROLLBACK (6 min backward)")
-                                elif limit_type == "PERSONAL_QUOTA":
-                                    print(f"⏳ This would trigger normal cooldown (6 min forward)")
-                                print(f"📄 Raw 429 response: {json.dumps(resp_data, indent=2)}")
-                            
-                            if response.status == 200 and isinstance(resp_data, dict):
-                                print(f"\n📊 RAW STAGE2 RESPONSE (Full API Response):")
-                                print("=" * 60)
-                                print(json.dumps(resp_data, indent=2, ensure_ascii=False))
-                                print("=" * 60)
-                                
-                                candidates = resp_data.get("candidates", [])
-                                if candidates:
-                                    content = candidates[0].get("content", {})
-                                    parts = content.get("parts", [])
-                                    if parts:
-                                        raw_json_text = parts[0].get("text", "")
-                                        print(f"\n🎯 EXTRACTED JSON FROM STAGE2:")
-                                        print("=" * 60)
-                                        print(raw_json_text)
-                                        print("=" * 60)
-                                        
-                                        try:
-                                            parsed_json = json.loads(raw_json_text)
-                                            print(f"\n✅ JSON parsing: SUCCESS ({len(parsed_json)} fields)")
-                                        except json.JSONDecodeError as e:
-                                            print(f"❌ JSON parsing FAILED: {e}")
-                                    else:
-                                        print(f"❌ No parts in content")
-                                else:
-                                    print(f"❌ No candidates in response")
-                            else:
-                                print(f"❌ Stage2 HTTP error: {response.status}")
-                                if isinstance(resp_data, str):
-                                    print(f"Response: {resp_data[:500]}...")
-                            
-                        except Exception as e:
-                            print(f"❌ Stage2 exception: {e}")
-                    else:
-                        print(f"❌ No text content in Stage1 response")
-                else:
-                    print(f"❌ No candidates in Stage1 response")
-            else:
-                print(f"❌ Stage1 HTTP error: {response.status}")
-                if isinstance(resp_data, str):
-                    print(f"Response: {resp_data[:500]}...")
+                        stage2_model = "gemini-2.5-flash"
+                        retry_model = "gemini-2.0-flash"
+                        
+                        print(f"Testing Stage2 with model: {stage2_model}")
+                        stage2_result = await client.analyze_business(
+                            test_domain, text_response, api_key, proxy_config, system_prompt,
+                            use_retry_model=False, model_override=stage2_model
+                        )
+                        
+                        print(f"Status: {'✓ SUCCESS' if stage2_result.get('success') else '❌ FAILED'}")
+                        print(f"Response time: {stage2_result.get('response_time', 0):.2f}s")
+                        
+                        if stage2_result.get("success"):
+                            result = stage2_result.get("result", {})
+                            print(f"✓ JSON parsing: SUCCESS ({len(result)} fields)")
+                        
+                        print(f"\nTesting Stage2 RETRY with model: {retry_model}")
+                        stage2_retry_result = await client.analyze_business(
+                            test_domain, text_response, api_key, proxy_config, system_prompt,
+                            use_retry_model=True, retry_model_override=retry_model
+                        )
+                        
+                        print(f"Retry Status: {'✓ SUCCESS' if stage2_retry_result.get('success') else '❌ FAILED'}")
+                        print(f"Retry Response time: {stage2_retry_result.get('response_time', 0):.2f}s")
+                        
+                        break
                 
-        except Exception as e:
-            print(f"❌ Stage1 exception: {e}")
+            except Exception as e:
+                print(f"❌ Request {i+1} exception: {e}")
         
         print(f"\n" + "=" * 70)
-        print("🎯 Enhanced Test completed!")
-        print("📝 This test shows RAW responses from Gemini API with GLOBAL_LIMIT detection")
-        print(f"🎯 NEW: 429 errors are classified as PERSONAL_QUOTA, GLOBAL_LIMIT, or UNKNOWN")
-        print(f"🔄 NEW: GLOBAL_LIMIT errors trigger api_last_used_date rollback (6 min backward)")
-        print(f"⏳ PERSONAL_QUOTA/UNKNOWN errors use normal cooldown (6 min forward)")
-        print(f"⏱️  Used adaptive delay: {current_delay}ms (dynamically configurable)")
-        print(f"🔧 Max concurrent starts: {max_concurrent} (configurable)")
-        print(f"🛡️  Keys protected from unfair penalization during Google rate limit spikes")
+        print("🎯 MODEL ROTATION Test completed!")
+        print("📝 This test shows model_override working for both Stage1 and Stage2")
+        print(f"🔄 Model rotation spreads load across multiple Gemini models")
+        print(f"⏳ Retry uses dedicated model (no rotation)")
+        print(f"🛡️  Enhanced 429 classification with GLOBAL_LIMIT rollback")
     
     async def main_test():
         if len(sys.argv) == 1:
@@ -813,7 +753,7 @@ if __name__ == "__main__":
             api_key, proxy_config = await test_with_manual_credentials()
         
         if api_key and proxy_config:
-            await run_enhanced_gemini_test(api_key, proxy_config)
+            await run_model_rotation_test(api_key, proxy_config)
         else:
             print("\n💡 Usage options:")
             print("1. Auto mode: python gemini_client.py")

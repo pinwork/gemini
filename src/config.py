@@ -5,7 +5,7 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 from datetime import datetime
 import os
 
@@ -371,6 +371,33 @@ class ConfigManager:
         except Exception as e:
             return {"error": str(e)}
 
+    # NEW MODEL ROTATION METHODS
+    @classmethod
+    def get_stage_models(cls, stage: str) -> List[str]:
+        """Get list of models for stage rotation from script_control.json"""
+        config = cls.get_script_config()
+        stage_config = config["stage_timings"][stage]
+        return stage_config["models"]
+    
+    @classmethod
+    def get_stage_retry_model_single(cls, stage: str) -> str:
+        """Get retry model for stage from script_control.json"""
+        config = cls.get_script_config()
+        stage_config = config["stage_timings"][stage]
+        return stage_config["retry_model"]
+    
+    @classmethod
+    def get_next_stage_model(cls, stage: str) -> str:
+        """Get next model for stage using round-robin rotation"""
+        from utils.model_rotation import get_stage1_model, get_stage2_model
+        
+        models = cls.get_stage_models(stage)
+        
+        if stage == "stage1":
+            return get_stage1_model(models)
+        elif stage == "stage2":
+            return get_stage2_model(models)
+
 
 def get_mongo_config() -> Dict:
     return ConfigManager.get_mongo_config()
@@ -386,6 +413,15 @@ def is_script_enabled() -> bool:
 
 def reload_configs() -> None:
     ConfigManager.reload_all_configs()
+
+# NEW MODEL ROTATION FUNCTIONS
+def get_next_stage_model(stage: str) -> str:
+    """Get next model for stage using rotation"""
+    return ConfigManager.get_next_stage_model(stage)
+
+def get_stage_retry_model(stage: str) -> str:
+    """Get retry model"""
+    return ConfigManager.get_stage_retry_model_single(stage)
 
 
 if __name__ == "__main__":
@@ -416,7 +452,15 @@ if __name__ == "__main__":
         print(f"   ✓ Stage2 schema loaded: {len(stage2_schema.get('properties', {}))} properties")
         print(f"   ✓ Required fields: {len(stage2_schema.get('required', []))}")
         
-        print("\n5. Testing Throttling:")
+        print("\n5. Testing Model Rotation:")
+        stage1_models = ConfigManager.get_stage_models("stage1")
+        stage2_models = ConfigManager.get_stage_models("stage2")
+        stage2_retry = ConfigManager.get_stage_retry_model_single("stage2")
+        print(f"   ✓ Stage1 models: {stage1_models}")
+        print(f"   ✓ Stage2 models: {stage2_models}")
+        print(f"   ✓ Stage2 retry: {stage2_retry}")
+        
+        print("\n6. Testing Throttling:")
         import time
         start_time = time.time()
         for i in range(100):
@@ -424,17 +468,13 @@ if __name__ == "__main__":
         end_time = time.time()
         print(f"   ✓ 100 cached reads took: {(end_time - start_time):.4f}s")
         
-        print("\n6. Adaptive Delay Helper Methods:")
-        print(f"   ✓ get_current_delay_ms(): {ConfigManager.get_current_delay_ms()}ms")
-        print(f"   ✓ is_adaptive_delay_enabled(): {ConfigManager.is_adaptive_delay_enabled()}")
-        
         print("\n7. Config Summary:")
         summary = ConfigManager.get_config_summary()
         for key, value in summary.items():
             print(f"   📊 {key}: {value}")
         
         print(f"\n=== All tests passed! ===")
-        print(f"🚀 ADAPTIVE DELAY ConfigManager ready!")
+        print(f"🚀 ConfigManager with MODEL ROTATION ready!")
         print(f"🔄 File throttling: {ConfigManager._file_check_interval}s interval")
         
     except Exception as e:

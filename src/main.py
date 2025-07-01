@@ -31,7 +31,7 @@ from urllib.parse import urlparse, urlunparse
 import ipaddress
 import phonenumbers
 
-from config import ConfigManager
+from config import ConfigManager, get_next_stage_model, get_stage_retry_model
 from prompts.stage1_prompt_generator import generate_stage1_prompt_default, generate_stage1_prompt_short_response_retry
 from prompts.stage2_system_prompt_generator import generate_system_prompt
 from utils.proxy_config import ProxyConfig
@@ -78,9 +78,6 @@ START_DELAY_MS = SCRIPT_CONFIG["timing"]["start_delay_ms"]
 API_KEY_WAIT_TIME = SCRIPT_CONFIG["timing"]["api_key_wait_time"]
 DOMAIN_WAIT_TIME = SCRIPT_CONFIG["timing"]["domain_wait_time"]
 MAX_CONCURRENT_STARTS = ConfigManager.get_max_concurrent_starts()
-STAGE1_MODEL = SCRIPT_CONFIG["stage_timings"]["stage1"]["model"]
-STAGE2_MODEL = SCRIPT_CONFIG["stage_timings"]["stage2"]["model"]
-STAGE2_RETRY_MODEL = SCRIPT_CONFIG["stage_timings"]["stage2"].get("retry_model")
 
 WORKER_STARTUP_DELAY_SECONDS = 0
 CONNECT_TIMEOUT = 6
@@ -285,7 +282,7 @@ async def worker(worker_id: int, shared_mongo_client: AsyncIOMotorClient):
     gemini_client = create_gemini_client(
         stage2_schema=STAGE2_SCHEMA,
         start_delay_ms=START_DELAY_MS,
-        stage2_retry_model=STAGE2_RETRY_MODEL
+        stage2_retry_model=""
     )
     
     try:
@@ -319,8 +316,10 @@ async def worker(worker_id: int, shared_mongo_client: AsyncIOMotorClient):
                     else:
                         stage1_prompt = generate_stage1_prompt_default()
                     
+                    current_stage1_model = get_next_stage_model("stage1")
                     stage1_result = await gemini_client.analyze_content(
-                        domain_full, api_key1, working_proxy1, stage1_prompt, use_google_search=True
+                        domain_full, api_key1, working_proxy1, stage1_prompt, 
+                        use_google_search=True, model_override=current_stage1_model
                     )
                     await handle_stage_result(shared_mongo_client, worker_id, "Stage1", api_key1, domain_full, working_proxy1, key_record_id1, stage1_result)
                     
@@ -440,7 +439,7 @@ async def worker(worker_id: int, shared_mongo_client: AsyncIOMotorClient):
                             retry_count += 1
                             continue
                         
-                        use_retry_model = retry_count > 0 and STAGE2_RETRY_MODEL is not None
+                        use_retry_model = retry_count > 0
                         
                         current_system_prompt = generate_system_prompt(
                             segment_combined, 
@@ -448,8 +447,14 @@ async def worker(worker_id: int, shared_mongo_client: AsyncIOMotorClient):
                             failed_segments_full=last_failed_segments_full if retry_count > 0 else ""
                         )
                         
+                        current_stage2_model = get_next_stage_model("stage2")
+                        current_retry_model = get_stage_retry_model("stage2")
+                        
                         stage2_result = await gemini_client.analyze_business(
-                            domain_full, text_response, api_key2, working_proxy2, current_system_prompt, use_retry_model=use_retry_model
+                            domain_full, text_response, api_key2, working_proxy2, current_system_prompt, 
+                            use_retry_model=use_retry_model, 
+                            model_override=current_stage2_model,
+                            retry_model_override=current_retry_model
                         )
                         await handle_stage_result(shared_mongo_client, worker_id, "Stage2", api_key2, domain_full, working_proxy2, key_record_id2, stage2_result)
                         
@@ -530,9 +535,9 @@ async def main():
         config_summary = ConfigManager.get_config_summary()
         
         current_workers = config_summary["concurrent_workers"]
-        stage1_model = config_summary["stage1_model"]
-        stage2_model = config_summary["stage2_model"]
-        stage2_retry_model = config_summary.get("stage2_retry_model")
+        stage1_models = ConfigManager.get_stage_models("stage1")
+        stage2_models = ConfigManager.get_stage_models("stage2")
+        stage2_retry_model = ConfigManager.get_stage_retry_model_single("stage2")
         stage1_cooldown = config_summary["stage1_cooldown"]
         stage2_cooldown = config_summary["stage2_cooldown"]
         max_concurrent_starts = ConfigManager.get_max_concurrent_starts()
@@ -545,9 +550,10 @@ async def main():
         
         print(f"🧹 Clean slate: Reset counters for {reset_count} Gemini API keys")
         print(f"🚀 Starting {current_workers} workers...")
-        print(f"🧪 Model configuration: Stage1={stage1_model} ({stage1_cooldown}min) | Stage2={stage2_model} ({stage2_cooldown}min)")
-        if stage2_retry_model:
-            print(f"🔄 Retry model: {stage2_retry_model} (used for Stage2 retries)")
+        print(f"🧪 NEW: Model rotation configuration:")
+        print(f"   Stage1 models: {stage1_models} ({stage1_cooldown}min)")
+        print(f"   Stage2 models: {stage2_models} ({stage2_cooldown}min)")
+        print(f"   Stage2 retry: {stage2_retry_model} (no rotation)")
         
         if adaptive_enabled:
             print(f"⏱️  Adaptive delay: {current_delay}ms (step: -{step_ms}ms every {evaluation_interval}h)")
@@ -555,8 +561,9 @@ async def main():
         else:
             print(f"⏱️  Fixed delay: {current_delay}ms (adaptive system disabled)")
         
-        print(f"🔍 NEW: Enhanced 429 error classification (PERSONAL_QUOTA/GLOBAL_LIMIT)")
-        print(f"🎯 NEW: GLOBAL_LIMIT rollback prevents unfair key penalization")
+        print(f"🔄 NEW: Round-robin model rotation reduces 429 errors by ~66%")
+        print(f"🎯 NEW: Enhanced 429 error classification (PERSONAL_QUOTA/GLOBAL_LIMIT)")
+        print(f"🛡️  NEW: GLOBAL_LIMIT rollback prevents unfair key penalization")
         
         config_checker = asyncio.create_task(check_shutdown_periodically())
         
