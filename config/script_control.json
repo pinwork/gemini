@@ -1,7 +1,7 @@
 {
   "enabled": true,
   "workers": {
-    "concurrent_workers": 60
+    "concurrent_workers": 100
   },
   "timing": {
     "start_delay_ms": 800,

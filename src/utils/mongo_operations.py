@@ -184,7 +184,8 @@ async def get_api_key_and_proxy(mongo_client: AsyncIOMotorClient, stage: str = "
 async def finalize_api_key_usage(mongo_client: AsyncIOMotorClient, key_record_id: str, 
                                 status_code: Optional[int] = None, is_proxy_error: bool = False, 
                                 working_proxy: Optional[ProxyConfig] = None, 
-                                freeze_minutes: Optional[int] = None) -> None:
+                                freeze_minutes: Optional[int] = None,
+                                limit_type: str = "UNKNOWN") -> None:
     try:
         api_db_name = MONGO_CONFIG["databases"]["api_db"]["name"]
         api_collection_name = MONGO_CONFIG["databases"]["api_db"]["collections"]["keys"]
@@ -192,15 +193,32 @@ async def finalize_api_key_usage(mongo_client: AsyncIOMotorClient, key_record_id
         api_keys_collection = mongo_client[api_db_name][api_collection_name]
         current_time = datetime.now(timezone.utc)
         
-        update_query = {"$set": {"api_last_used_date": current_time}}
-        
-        if status_code == 200:
-            update_query["$inc"] = {"request_count_200": 1}
-        elif status_code == 429:
-            update_query["$inc"] = {"request_count_429": 1}
-        
-        if status_code is not None:
+        # NEW: Handle GLOBAL_LIMIT rollback logic
+        if status_code == 429 and limit_type == "GLOBAL_LIMIT":
+            # For GLOBAL_LIMIT errors, rollback api_last_used_date by 6 minutes
+            # so the key doesn't get penalized for Google's global rate limiting
+            cooldown_minutes = 6
+            rollback_time = current_time - timedelta(minutes=cooldown_minutes)
+            update_query = {"$set": {"api_last_used_date": rollback_time}}
+            
+            # Still count the 429 for statistics
+            if "$inc" not in update_query:
+                update_query["$inc"] = {}
+            update_query["$inc"]["request_count_429"] = 1
             update_query["$set"]["last_response_status"] = status_code
+                
+            logger.info(f"GLOBAL_LIMIT detected for key {key_record_id[-4:]}: Rolling back api_last_used_date by {cooldown_minutes} minutes")
+        else:
+            # Normal flow for all other cases
+            update_query = {"$set": {"api_last_used_date": current_time}}
+            
+            if status_code == 200:
+                update_query["$inc"] = {"request_count_200": 1}
+            elif status_code == 429:
+                update_query["$inc"] = {"request_count_429": 1}
+            
+            if status_code is not None:
+                update_query["$set"]["last_response_status"] = status_code
         
         if is_proxy_error:
             if "$inc" not in update_query:
@@ -208,6 +226,8 @@ async def finalize_api_key_usage(mongo_client: AsyncIOMotorClient, key_record_id
             update_query["$inc"]["proxy_error_count"] = 1
         
         if working_proxy and working_proxy.username:
+            if "$set" not in update_query:
+                update_query["$set"] = {}
             update_query["$set"]["proxy_username"] = working_proxy.username
         
         result = await api_keys_collection.update_one(
@@ -798,7 +818,7 @@ async def update_api_key_ip(mongo_client: AsyncIOMotorClient, key_id: str, ip: s
         return False
 
 if __name__ == "__main__":
-    print("=== MongoDB Operations - Adaptive Delay Ready ===\n")
+    print("=== MongoDB Operations - GLOBAL_LIMIT Rollback Ready ===\n")
     
     print("✅ MongoDB Operations Module loaded successfully")
     print(f"📁 Using ConfigManager for all configurations")
@@ -822,5 +842,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"❌ Config loading failed: {e}")
     
-    print("\n🔄 CRITICAL CHANGE: request_count_429 NO LONGER resets on HTTP 200")
-    print("🧹 Clean accumulation for adaptive delay calculations")
+    print("\n🎯 NEW: GLOBAL_LIMIT rollback in finalize_api_key_usage()")
+    print("🔄 Enhanced 429 handling with api_last_used_date rollback")
+    print("🛡️  Keys protected from unfair penalization during Google rate limits")

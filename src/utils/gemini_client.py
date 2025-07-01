@@ -111,7 +111,7 @@ class GeminiClient:
         return raw_response[:200] + "..." if len(raw_response) > 200 else raw_response
     
     def classify_429_error(self, resp_data: dict) -> str:
-        """Classify 429 error as personal quota vs global rate limit"""
+        """Enhanced 429 error classification for GLOBAL_LIMIT rollback detection"""
         if not isinstance(resp_data, dict) or "error" not in resp_data:
             return "UNKNOWN"
         
@@ -133,10 +133,16 @@ class GeminiClient:
             "quota exceeded" in message):
             return "PERSONAL_QUOTA"
         
-        # Global limit indicators  
+        # Global limit indicators (triggers rollback)
         if ("resource has been exhausted" in message and 
             "check quota" in message and 
             not details):
+            return "GLOBAL_LIMIT"
+        
+        # Additional global limit patterns
+        if ("globally rate limited" in message or
+            "global rate limit" in message or
+            "service temporarily overloaded" in message):
             return "GLOBAL_LIMIT"
         
         return "UNKNOWN"
@@ -312,7 +318,7 @@ class GeminiClient:
                     "response_time": response_time
                 }
             elif response.status == 429:
-                # Enhanced 429 handling with classification
+                # Enhanced 429 handling with classification for GLOBAL_LIMIT rollback
                 limit_type = "UNKNOWN"
                 if isinstance(resp_data, dict):
                     limit_type = self.classify_429_error(resp_data)
@@ -327,7 +333,7 @@ class GeminiClient:
                     "error": f"HTTP {response.status}: {formatted_error}",
                     "status_code": response.status,
                     "response_time": response_time,
-                    "limit_type": limit_type  # NEW: 429 classification
+                    "limit_type": limit_type  # NEW: 429 classification for rollback logic
                 }
             else:
                 formatted_error = self.format_api_error(str(resp_data))
@@ -441,7 +447,7 @@ class GeminiClient:
                         "error": "Invalid JSON in response"
                     }
             elif response.status == 429:
-                # Enhanced 429 handling with classification
+                # Enhanced 429 handling with classification for GLOBAL_LIMIT rollback
                 limit_type = "UNKNOWN"
                 if isinstance(resp_data, dict):
                     limit_type = self.classify_429_error(resp_data)
@@ -454,7 +460,7 @@ class GeminiClient:
                     "status_code": response.status, 
                     "response_time": response_time, 
                     "error": f"HTTP {response.status}: {formatted_error}",
-                    "limit_type": limit_type  # NEW: 429 classification
+                    "limit_type": limit_type  # NEW: 429 classification for rollback logic
                 }
             else:
                 formatted_error = self.format_api_error(str(resp_data))
@@ -525,7 +531,8 @@ class GeminiClient:
             "timing_intervals": {
                 "current_delay_ms": current_delay,
                 "max_concurrent_starts": max_concurrent_starts
-            }
+            },
+            "rollback_features": ["GLOBAL_LIMIT_detection", "429_classification"]  # NEW: Rollback feature tracking
         }
 
 
@@ -562,7 +569,7 @@ if __name__ == "__main__":
     import sys
     
     async def test_with_mongo_credentials():
-        print("=== Gemini Client Auto Test (MongoDB credentials) ===\n")
+        print("=== Gemini Client with GLOBAL_LIMIT Rollback Test ===\n")
         
         try:
             from mongo_operations import get_api_key_and_proxy
@@ -621,6 +628,7 @@ if __name__ == "__main__":
             proxy_username, proxy_password = proxy_auth.split(":", 1)
         
         try:
+            from proxy_config import ProxyConfig
             proxy_config = ProxyConfig(
                 protocol=proxy_protocol,
                 ip=proxy_ip,
@@ -634,7 +642,7 @@ if __name__ == "__main__":
             print(f"❌ Proxy config error: {e}")
             return None, None
     
-    async def run_gemini_test(api_key, proxy_config):
+    async def run_enhanced_gemini_test(api_key, proxy_config):
         try:
             schema_path = Path(__file__).parent.parent.parent / "config" / "stage2_schema.json"
             with schema_path.open("r", encoding="utf-8") as f:
@@ -645,7 +653,7 @@ if __name__ == "__main__":
             schema = {}
         
         client = create_gemini_client(schema, start_delay_ms=500)
-        print(f"✓ GeminiClient created with 429 classification support")
+        print(f"✓ GeminiClient created with GLOBAL_LIMIT rollback support")
         
         max_concurrent = get_max_concurrent_starts()
         current_delay = get_current_delay_ms()
@@ -656,16 +664,16 @@ if __name__ == "__main__":
         stage1_prompt = "Analyze this website and provide detailed information about its content, purpose, and functionality."
         
         print(f"\n🔍 Testing domain: {test_domain}")
-        print("=" * 60)
+        print("=" * 70)
         
-        print("\n📖 STAGE 1 - Content Analysis:")
-        print("-" * 40)
+        print(f"\n📖 STAGE 1 - Content Analysis with Enhanced 429 Classification:")
+        print("-" * 50)
         
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{client.stage1_model}:generateContent?key={api_key}"
             payload = client._build_stage1_payload(test_domain, stage1_prompt)
             
-            print("🔧 Making raw Stage1 request...")
+            print("🔧 Making enhanced Stage1 request...")
             start_time = asyncio.get_event_loop().time()
             
             response, resp_data = await client._make_request(
@@ -679,17 +687,21 @@ if __name__ == "__main__":
             print(f"Response time: {response_time:.2f}s")
             print(f"Status code: {response.status}")
             
-            # Test 429 classification if we get one
+            # Test enhanced 429 classification
             if response.status == 429 and isinstance(resp_data, dict):
                 limit_type = client.classify_429_error(resp_data)
-                print(f"🔍 429 Classification: {limit_type}")
+                print(f"🎯 NEW: 429 Classification: {limit_type}")
+                if limit_type == "GLOBAL_LIMIT":
+                    print(f"🔄 NEW: This would trigger api_last_used_date ROLLBACK (6 min backward)")
+                elif limit_type == "PERSONAL_QUOTA":
+                    print(f"⏳ This would trigger normal cooldown (6 min forward)")
                 print(f"📄 Raw 429 response: {json.dumps(resp_data, indent=2)}")
             
             if response.status == 200 and isinstance(resp_data, dict):
                 print(f"\n📄 RAW STAGE1 RESPONSE (Full API Response):")
-                print("=" * 50)
+                print("=" * 60)
                 print(json.dumps(resp_data, indent=2, ensure_ascii=False))
-                print("=" * 50)
+                print("=" * 60)
                 
                 candidates = resp_data.get("candidates", [])
                 if candidates:
@@ -702,12 +714,12 @@ if __name__ == "__main__":
                     
                     if text_response:
                         print(f"\n📄 EXTRACTED TEXT FROM STAGE1:")
-                        print("=" * 50)
+                        print("=" * 60)
                         print(text_response)
-                        print("=" * 50)
+                        print("=" * 60)
                         
-                        print("\n🧠 STAGE 2 - Business Analysis:")
-                        print("-" * 40)
+                        print(f"\n🧠 STAGE 2 - Business Analysis with Enhanced 429 Classification:")
+                        print("-" * 50)
                         
                         system_prompt = """You are a website analyzer. Analyze the provided content and return structured business information in JSON format according to the provided schema."""
                         
@@ -715,11 +727,11 @@ if __name__ == "__main__":
                             url = f"https://generativelanguage.googleapis.com/v1beta/models/{client.stage2_model}:generateContent?key={api_key}"
                             payload = client._build_stage2_payload(test_domain, text_response, system_prompt)
                             
-                            print("🔧 Making raw Stage2 request...")
+                            print("🔧 Making enhanced Stage2 request...")
                             start_time = asyncio.get_event_loop().time()
                             
                             response, resp_data = await client._make_request(
-                                proxy_config, url, payload, "stage2", STAGE2_TIMEOUT_SECONDS
+                                proxy_config, url, payload, "stage2", 90
                             )
                             
                             end_time = asyncio.get_event_loop().time()
@@ -729,17 +741,21 @@ if __name__ == "__main__":
                             print(f"Response time: {response_time:.2f}s")
                             print(f"Status code: {response.status}")
                             
-                            # Test 429 classification if we get one
+                            # Test enhanced 429 classification
                             if response.status == 429 and isinstance(resp_data, dict):
                                 limit_type = client.classify_429_error(resp_data)
-                                print(f"🔍 429 Classification: {limit_type}")
+                                print(f"🎯 NEW: 429 Classification: {limit_type}")
+                                if limit_type == "GLOBAL_LIMIT":
+                                    print(f"🔄 NEW: This would trigger api_last_used_date ROLLBACK (6 min backward)")
+                                elif limit_type == "PERSONAL_QUOTA":
+                                    print(f"⏳ This would trigger normal cooldown (6 min forward)")
                                 print(f"📄 Raw 429 response: {json.dumps(resp_data, indent=2)}")
                             
                             if response.status == 200 and isinstance(resp_data, dict):
                                 print(f"\n📊 RAW STAGE2 RESPONSE (Full API Response):")
-                                print("=" * 50)
+                                print("=" * 60)
                                 print(json.dumps(resp_data, indent=2, ensure_ascii=False))
-                                print("=" * 50)
+                                print("=" * 60)
                                 
                                 candidates = resp_data.get("candidates", [])
                                 if candidates:
@@ -748,9 +764,9 @@ if __name__ == "__main__":
                                     if parts:
                                         raw_json_text = parts[0].get("text", "")
                                         print(f"\n🎯 EXTRACTED JSON FROM STAGE2:")
-                                        print("=" * 50)
+                                        print("=" * 60)
                                         print(raw_json_text)
-                                        print("=" * 50)
+                                        print("=" * 60)
                                         
                                         try:
                                             parsed_json = json.loads(raw_json_text)
@@ -780,12 +796,15 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"❌ Stage1 exception: {e}")
         
-        print(f"\n" + "=" * 60)
-        print("🎯 Test completed!")
-        print("📝 This test shows RAW responses from Gemini API before any processing")
-        print(f"🔍 NEW: 429 errors are now classified as PERSONAL_QUOTA or GLOBAL_LIMIT")
+        print(f"\n" + "=" * 70)
+        print("🎯 Enhanced Test completed!")
+        print("📝 This test shows RAW responses from Gemini API with GLOBAL_LIMIT detection")
+        print(f"🎯 NEW: 429 errors are classified as PERSONAL_QUOTA, GLOBAL_LIMIT, or UNKNOWN")
+        print(f"🔄 NEW: GLOBAL_LIMIT errors trigger api_last_used_date rollback (6 min backward)")
+        print(f"⏳ PERSONAL_QUOTA/UNKNOWN errors use normal cooldown (6 min forward)")
         print(f"⏱️  Used adaptive delay: {current_delay}ms (dynamically configurable)")
         print(f"🔧 Max concurrent starts: {max_concurrent} (configurable)")
+        print(f"🛡️  Keys protected from unfair penalization during Google rate limit spikes")
     
     async def main_test():
         if len(sys.argv) == 1:
@@ -794,7 +813,7 @@ if __name__ == "__main__":
             api_key, proxy_config = await test_with_manual_credentials()
         
         if api_key and proxy_config:
-            await run_gemini_test(api_key, proxy_config)
+            await run_enhanced_gemini_test(api_key, proxy_config)
         else:
             print("\n💡 Usage options:")
             print("1. Auto mode: python gemini_client.py")

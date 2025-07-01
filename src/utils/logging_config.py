@@ -335,6 +335,21 @@ def log_rate_limit(worker_id: int, stage: str, api_key: str, domain_full: str, f
     
     rate_limits_logger.info(LazyLogFormatter(format_message))
 
+def log_global_limit_rollback(worker_id: int, stage: str, api_key: str, domain_full: str, 
+                             cooldown_minutes: int, rate_limits_logger: logging.Logger):
+    """Enhanced logging for GLOBAL_LIMIT rollback actions"""
+    if not rate_limits_logger.isEnabledFor(logging.INFO):
+        return
+    
+    def format_message():
+        masked_key = _format_masked_key(api_key)
+        short_domain = _format_short_domain(domain_full)
+        return (f"Worker-{worker_id:02d} | {stage:6s} | 429 | Type:GLOBAL_LIMIT | "
+                f"Key: {masked_key} | {short_domain} | "
+                f"ROLLBACK: api_last_used_date by {cooldown_minutes}min (Google global rate limit)")
+    
+    rate_limits_logger.info(LazyLogFormatter(format_message))
+
 def log_http_error(worker_id: int, stage: str, api_key: str, domain_full: str, status_code: int, error_msg: str, http_errors_logger: logging.Logger):
     if not http_errors_logger.isEnabledFor(logging.INFO):
         return
@@ -471,7 +486,7 @@ def log_proxy_error(worker_id: int, stage: str, proxy_config, domain_full: str, 
     proxy_errors_logger.info(LazyLogFormatter(format_message))
 
 if __name__ == "__main__":
-    print("=== Enhanced Logging Configuration with 429 Classification ===\n")
+    print("=== Enhanced Logging Configuration with GLOBAL_LIMIT Rollback ===\n")
     
     print("1. Setting up all loggers:")
     loggers = setup_all_loggers()
@@ -494,21 +509,22 @@ if __name__ == "__main__":
     rate_limits_logger = loggers['rate_limits']
     
     try:
-        # Test with different limit types
+        # Test with different limit types including GLOBAL_LIMIT rollback
         log_rate_limit(1, "Stage1", "AIz...ABC4", "example.com", 3, "PERSONAL_QUOTA", rate_limits_logger)
-        log_rate_limit(2, "Stage2", "AIz...XYZ9", "test.org", 3, "GLOBAL_LIMIT", rate_limits_logger)
-        log_rate_limit(3, "Stage1", "AIz...DEF7", "sample.net", 3, "UNKNOWN", rate_limits_logger)
+        log_global_limit_rollback(2, "Stage1", "AIz...XYZ9", "test.org", 6, rate_limits_logger)
+        log_rate_limit(3, "Stage2", "AIz...DEF7", "sample.net", 3, "UNKNOWN", rate_limits_logger)
         print("   ✓ Enhanced rate limit logging test successful")
         print("   📊 Sample outputs:")
         print("      Worker-01 | Stage1 | 429 | Type:PERSONAL_QUOTA | Key: AIz...ABC4 | example.com | UNAVAILABLE for 3min")
-        print("      Worker-02 | Stage2 | 429 | Type:GLOBAL_LIMIT | Key: AIz...XYZ9 | test.org | UNAVAILABLE for 3min")
-        print("      Worker-03 | Stage1 | 429 | Type:UNKNOWN | Key: AIz...DEF7 | sample.net | UNAVAILABLE for 3min")
+        print("      Worker-02 | Stage1 | 429 | Type:GLOBAL_LIMIT | Key: AIz...XYZ9 | test.org | ROLLBACK: api_last_used_date by 6min (Google global rate limit)")
+        print("      Worker-03 | Stage2 | 429 | Type:UNKNOWN | Key: AIz...DEF7 | sample.net | UNAVAILABLE for 3min")
         
     except Exception as e:
         print(f"   ✗ enhanced rate limit logging test → ERROR: {e}")
     
     print(f"\n=== Enhanced logging ready ===")
-    print(f"🔍 NEW: 429 errors now include classification (PERSONAL_QUOTA/GLOBAL_LIMIT)")
-    print(f"📊 Updated log_rate_limit() function accepts limit_type parameter")
-    print(f"🚀 Ready for enhanced rate limit analysis!")
+    print(f"🎯 NEW: log_global_limit_rollback() function for GLOBAL_LIMIT rollback logging")
+    print(f"🔍 Enhanced: 429 errors classified as PERSONAL_QUOTA/GLOBAL_LIMIT/UNKNOWN")
+    print(f"📊 Enhanced: Specific rollback messages for GLOBAL_LIMIT cases")
+    print(f"🚀 Ready for enhanced rate limit analysis with rollback protection!")
     print(f"Total loggers configured: {len(loggers)}")

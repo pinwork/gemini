@@ -53,7 +53,8 @@ from utils.validation_utils import (
 from utils.logging_config import (
     setup_all_loggers, log_success_timing, log_rate_limit, log_http_error,
     log_stage1_issue, log_error_details, log_proxy_error, log_short_response_with_retry_info,
-    log_stage1_request_failed_with_reason, log_short_response_max_attempts
+    log_stage1_request_failed_with_reason, log_short_response_max_attempts,
+    log_global_limit_rollback
 )
 from utils.network_error_classifier import (
     ErrorType, ErrorDetails, classify_exception, is_proxy_error
@@ -241,14 +242,17 @@ async def get_current_ip_with_retry(proxy_config: ProxyConfig, mongo_client: Asy
 async def handle_stage_result(mongo_client, worker_id, stage_name, api_key, domain_full, proxy_config, key_record_id, result):
     status_code = result.get("status_code")
     response_time = result.get("response_time", 0)
+    limit_type = result.get("limit_type", "UNKNOWN")
     
     if status_code == 200:
         log_success_timing_wrapper(worker_id, stage_name, api_key, domain_full, response_time)
     elif status_code == 429:
-        # Enhanced 429 handling with classification
-        limit_type = result.get("limit_type", "UNKNOWN")
-        freeze_minutes = 3
-        log_rate_limit_wrapper(worker_id, stage_name, api_key, domain_full, freeze_minutes, limit_type)
+        if limit_type == "GLOBAL_LIMIT":
+            log_global_limit_rollback(worker_id, stage_name, api_key, domain_full, 6, rate_limits_logger)
+        else:
+            # ВИПРАВЛЕННЯ: Використовуємо реальний cooldown з конфігурації
+            cooldown_minutes = ConfigManager.get_stage_cooldown(stage_name.lower())  # stage1 або stage2
+            log_rate_limit_wrapper(worker_id, stage_name, api_key, domain_full, cooldown_minutes, limit_type)
     elif status_code is not None:
         error_details = classify_exception(None, status_code)
         log_error_details_wrapper(worker_id, stage_name, api_key, domain_full, error_details, response_time)
@@ -275,7 +279,7 @@ async def handle_stage_result(mongo_client, worker_id, stage_name, api_key, doma
                 api_key_consumed = not is_proxy_err
     
     freeze_minutes_param = None
-    await finalize_api_key_usage(mongo_client, key_record_id, status_code, is_proxy_err, proxy_config, freeze_minutes_param)
+    await finalize_api_key_usage(mongo_client, key_record_id, status_code, is_proxy_err, proxy_config, freeze_minutes_param, limit_type)
 
 async def worker(worker_id: int, shared_mongo_client: AsyncIOMotorClient):
     gemini_client = create_gemini_client(
@@ -305,7 +309,7 @@ async def worker(worker_id: int, shared_mongo_client: AsyncIOMotorClient):
                     detected_ip1 = key_rec1["current_ip"]
                 
                 if not detected_ip1:
-                    await finalize_api_key_usage(shared_mongo_client, key_record_id1, None, True, working_proxy1)
+                    await finalize_api_key_usage(shared_mongo_client, key_record_id1, None, True, working_proxy1, None, "UNKNOWN")
                     await revert_domain_status(shared_mongo_client, domain_id, "proxy_ip_refresh_failed", revert_reasons_logger)
                     continue
                 
@@ -404,7 +408,7 @@ async def worker(worker_id: int, shared_mongo_client: AsyncIOMotorClient):
                     log_error_details_wrapper(worker_id, "Stage1", api_key1, domain_full, error_details)
                     
                     is_proxy_err = error_details.error_type == ErrorType.PROXY
-                    await finalize_api_key_usage(shared_mongo_client, key_record_id1, None, is_proxy_err, working_proxy1)
+                    await finalize_api_key_usage(shared_mongo_client, key_record_id1, None, is_proxy_err, working_proxy1, None, "UNKNOWN")
                     logger.error(f"Worker {worker_id}: Stage1 {error_details.exception_class} with {working_proxy1.connection_string}: {stage1_exception}")
                     
                     exception_reason = f"exception_{error_details.exception_class.lower()}"
@@ -432,7 +436,7 @@ async def worker(worker_id: int, shared_mongo_client: AsyncIOMotorClient):
                             detected_ip2 = key_rec2["current_ip"]
                         
                         if not detected_ip2:
-                            await finalize_api_key_usage(shared_mongo_client, key_record_id2, None, True, working_proxy2)
+                            await finalize_api_key_usage(shared_mongo_client, key_record_id2, None, True, working_proxy2, None, "UNKNOWN")
                             retry_count += 1
                             continue
                         
@@ -473,7 +477,7 @@ async def worker(worker_id: int, shared_mongo_client: AsyncIOMotorClient):
                         log_error_details_wrapper(worker_id, "Stage2", api_key2, domain_full, error_details)
                         
                         is_proxy_err = error_details.error_type == ErrorType.PROXY
-                        await finalize_api_key_usage(shared_mongo_client, key_record_id2, None, is_proxy_err, working_proxy2)
+                        await finalize_api_key_usage(shared_mongo_client, key_record_id2, None, is_proxy_err, working_proxy2, None, "UNKNOWN")
                         
                         retry_count += 1
                 
@@ -552,6 +556,7 @@ async def main():
             print(f"⏱️  Fixed delay: {current_delay}ms (adaptive system disabled)")
         
         print(f"🔍 NEW: Enhanced 429 error classification (PERSONAL_QUOTA/GLOBAL_LIMIT)")
+        print(f"🎯 NEW: GLOBAL_LIMIT rollback prevents unfair key penalization")
         
         config_checker = asyncio.create_task(check_shutdown_periodically())
         
