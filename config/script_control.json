@@ -1,19 +1,19 @@
 {
-  "enabled": false,
+  "enabled": true,
   "workers": {
     "concurrent_workers": 60
   },
   "timing": {
-    "start_delay_ms": 700,
+    "start_delay_ms": 800,
     "api_key_wait_time": 60,
     "domain_wait_time": 60,
     "max_concurrent_starts": 1
   },
   "adaptive_delay": {
     "enabled": true,
-    "max_delay_ms": 700,
-    "min_delay_ms": 200,
-    "current_delay_ms": 640,
+    "max_delay_ms": 800,
+    "min_delay_ms": 300,
+    "current_delay_ms": 800,
     "step_ms": 5,
     "evaluation_interval_hours": 1,
     "last_evaluation": "2025-07-01T05:10:03.896077+00:00"

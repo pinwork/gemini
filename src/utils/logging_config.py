@@ -323,14 +323,15 @@ def log_success_timing(worker_id: int, stage: str, api_key: str, domain_full: st
     
     success_timing_logger.info(LazyLogFormatter(format_message))
 
-def log_rate_limit(worker_id: int, stage: str, api_key: str, domain_full: str, freeze_minutes: int, rate_limits_logger: logging.Logger):
+def log_rate_limit(worker_id: int, stage: str, api_key: str, domain_full: str, freeze_minutes: int, limit_type: str, rate_limits_logger: logging.Logger):
+    """Enhanced rate limit logging with 429 classification"""
     if not rate_limits_logger.isEnabledFor(logging.INFO):
         return
     
     def format_message():
         masked_key = _format_masked_key(api_key)
         short_domain = _format_short_domain(domain_full)
-        return f"Worker-{worker_id:02d} | {stage:6s} | 429 | Key: {masked_key} | {short_domain} | UNAVAILABLE for 3min (natural filter)"
+        return f"Worker-{worker_id:02d} | {stage:6s} | 429 | Type:{limit_type} | Key: {masked_key} | {short_domain} | UNAVAILABLE for {freeze_minutes}min"
     
     rate_limits_logger.info(LazyLogFormatter(format_message))
 
@@ -470,9 +471,9 @@ def log_proxy_error(worker_id: int, stage: str, proxy_config, domain_full: str, 
     proxy_errors_logger.info(LazyLogFormatter(format_message))
 
 if __name__ == "__main__":
-    print("=== Adaptive Delay Logging Configuration Test Suite ===\n")
+    print("=== Enhanced Logging Configuration with 429 Classification ===\n")
     
-    print("1. Setting up all loggers including adaptive_delay:")
+    print("1. Setting up all loggers:")
     loggers = setup_all_loggers()
     for name, logger in loggers.items():
         handler_count = len(logger.handlers)
@@ -488,20 +489,26 @@ if __name__ == "__main__":
     else:
         print("   📁 Log directory will be created on first use")
     
-    print(f"\n3. Testing adaptive delay logger:")
+    print(f"\n3. Testing enhanced rate limit logging:")
     
-    adaptive_logger = loggers['adaptive_delay']
+    rate_limits_logger = loggers['rate_limits']
     
     try:
-        adaptive_logger.info("STARTUP RESET | Gemini Keys: 15 | Counters cleared for clean slate")
-        adaptive_logger.info("EVALUATION | Gemini Keys: 15 | Total 200: 8547 | Total 429: 183 | Success Rate: 97.9% | 700ms → 680ms")
-        adaptive_logger.info("RESET counters for 15 Gemini keys")
-        print("   ✓ Adaptive delay logging test successful")
+        # Test with different limit types
+        log_rate_limit(1, "Stage1", "AIz...ABC4", "example.com", 3, "PERSONAL_QUOTA", rate_limits_logger)
+        log_rate_limit(2, "Stage2", "AIz...XYZ9", "test.org", 3, "GLOBAL_LIMIT", rate_limits_logger)
+        log_rate_limit(3, "Stage1", "AIz...DEF7", "sample.net", 3, "UNKNOWN", rate_limits_logger)
+        print("   ✓ Enhanced rate limit logging test successful")
+        print("   📊 Sample outputs:")
+        print("      Worker-01 | Stage1 | 429 | Type:PERSONAL_QUOTA | Key: AIz...ABC4 | example.com | UNAVAILABLE for 3min")
+        print("      Worker-02 | Stage2 | 429 | Type:GLOBAL_LIMIT | Key: AIz...XYZ9 | test.org | UNAVAILABLE for 3min")
+        print("      Worker-03 | Stage1 | 429 | Type:UNKNOWN | Key: AIz...DEF7 | sample.net | UNAVAILABLE for 3min")
         
     except Exception as e:
-        print(f"   ✗ adaptive delay logging test → ERROR: {e}")
+        print(f"   ✗ enhanced rate limit logging test → ERROR: {e}")
     
-    print(f"\n=== Test completed ===")
-    print(f"🚀 NEW: adaptive_delay.log configured!")
+    print(f"\n=== Enhanced logging ready ===")
+    print(f"🔍 NEW: 429 errors now include classification (PERSONAL_QUOTA/GLOBAL_LIMIT)")
+    print(f"📊 Updated log_rate_limit() function accepts limit_type parameter")
+    print(f"🚀 Ready for enhanced rate limit analysis!")
     print(f"Total loggers configured: {len(loggers)}")
-    print(f"🔄 Ready for adaptive delay evaluation logging")

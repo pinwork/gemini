@@ -110,6 +110,37 @@ class GeminiClient:
         
         return raw_response[:200] + "..." if len(raw_response) > 200 else raw_response
     
+    def classify_429_error(self, resp_data: dict) -> str:
+        """Classify 429 error as personal quota vs global rate limit"""
+        if not isinstance(resp_data, dict) or "error" not in resp_data:
+            return "UNKNOWN"
+        
+        error = resp_data["error"]
+        message = error.get("message", "").lower()
+        details = error.get("details", [])
+        
+        # Personal quota indicators
+        if details:
+            # Check for QuotaFailure in details
+            for detail in details:
+                if isinstance(detail, dict) and detail.get("@type") == "type.googleapis.com/google.rpc.QuotaFailure":
+                    return "PERSONAL_QUOTA"
+        
+        # Additional personal quota indicators
+        if ("billing details" in message or 
+            "current quota" in message or
+            "exceeded your current quota" in message or
+            "quota exceeded" in message):
+            return "PERSONAL_QUOTA"
+        
+        # Global limit indicators  
+        if ("resource has been exhausted" in message and 
+            "check quota" in message and 
+            not details):
+            return "GLOBAL_LIMIT"
+        
+        return "UNKNOWN"
+    
     async def _enforce_request_interval(self, stage_name: str) -> None:
         stage_key = stage_name.lower()
         
@@ -280,6 +311,24 @@ class GeminiClient:
                     "status_code": response.status,
                     "response_time": response_time
                 }
+            elif response.status == 429:
+                # Enhanced 429 handling with classification
+                limit_type = "UNKNOWN"
+                if isinstance(resp_data, dict):
+                    limit_type = self.classify_429_error(resp_data)
+                    formatted_error = self.format_api_error(str(resp_data))
+                else:
+                    formatted_error = f"Rate limit (parsing failed): {resp_data}"
+                
+                return {
+                    "success": False,
+                    "grounding_status": "HTTP_ERROR",
+                    "text_response": "",
+                    "error": f"HTTP {response.status}: {formatted_error}",
+                    "status_code": response.status,
+                    "response_time": response_time,
+                    "limit_type": limit_type  # NEW: 429 classification
+                }
             else:
                 formatted_error = self.format_api_error(str(resp_data))
                 return {
@@ -391,7 +440,22 @@ class GeminiClient:
                         "response_time": response_time, 
                         "error": "Invalid JSON in response"
                     }
-                            
+            elif response.status == 429:
+                # Enhanced 429 handling with classification
+                limit_type = "UNKNOWN"
+                if isinstance(resp_data, dict):
+                    limit_type = self.classify_429_error(resp_data)
+                    formatted_error = self.format_api_error(str(resp_data))
+                else:
+                    formatted_error = f"Rate limit (parsing failed): {resp_data}"
+                
+                return {
+                    "success": False, 
+                    "status_code": response.status, 
+                    "response_time": response_time, 
+                    "error": f"HTTP {response.status}: {formatted_error}",
+                    "limit_type": limit_type  # NEW: 429 classification
+                }
             else:
                 formatted_error = self.format_api_error(str(resp_data))
                 return {
@@ -581,7 +645,7 @@ if __name__ == "__main__":
             schema = {}
         
         client = create_gemini_client(schema, start_delay_ms=500)
-        print(f"✓ GeminiClient created with adaptive delay support")
+        print(f"✓ GeminiClient created with 429 classification support")
         
         max_concurrent = get_max_concurrent_starts()
         current_delay = get_current_delay_ms()
@@ -614,6 +678,12 @@ if __name__ == "__main__":
             print(f"Status: {'✓ SUCCESS' if response.status == 200 else '❌ FAILED'}")
             print(f"Response time: {response_time:.2f}s")
             print(f"Status code: {response.status}")
+            
+            # Test 429 classification if we get one
+            if response.status == 429 and isinstance(resp_data, dict):
+                limit_type = client.classify_429_error(resp_data)
+                print(f"🔍 429 Classification: {limit_type}")
+                print(f"📄 Raw 429 response: {json.dumps(resp_data, indent=2)}")
             
             if response.status == 200 and isinstance(resp_data, dict):
                 print(f"\n📄 RAW STAGE1 RESPONSE (Full API Response):")
@@ -658,6 +728,12 @@ if __name__ == "__main__":
                             print(f"Status: {'✓ SUCCESS' if response.status == 200 else '❌ FAILED'}")
                             print(f"Response time: {response_time:.2f}s")
                             print(f"Status code: {response.status}")
+                            
+                            # Test 429 classification if we get one
+                            if response.status == 429 and isinstance(resp_data, dict):
+                                limit_type = client.classify_429_error(resp_data)
+                                print(f"🔍 429 Classification: {limit_type}")
+                                print(f"📄 Raw 429 response: {json.dumps(resp_data, indent=2)}")
                             
                             if response.status == 200 and isinstance(resp_data, dict):
                                 print(f"\n📊 RAW STAGE2 RESPONSE (Full API Response):")
@@ -707,6 +783,7 @@ if __name__ == "__main__":
         print(f"\n" + "=" * 60)
         print("🎯 Test completed!")
         print("📝 This test shows RAW responses from Gemini API before any processing")
+        print(f"🔍 NEW: 429 errors are now classified as PERSONAL_QUOTA or GLOBAL_LIMIT")
         print(f"⏱️  Used adaptive delay: {current_delay}ms (dynamically configurable)")
         print(f"🔧 Max concurrent starts: {max_concurrent} (configurable)")
     

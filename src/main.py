@@ -124,8 +124,9 @@ missing_segmentation_logger = all_loggers['missing_segmentation']
 def log_success_timing_wrapper(worker_id: int, stage: str, api_key: str, domain_full: str, response_time: float):
     log_success_timing(worker_id, stage, api_key, domain_full, response_time, success_timing_logger)
 
-def log_rate_limit_wrapper(worker_id: int, stage: str, api_key: str, domain_full: str, freeze_minutes: int):
-    log_rate_limit(worker_id, stage, api_key, domain_full, freeze_minutes, rate_limits_logger)
+def log_rate_limit_wrapper(worker_id: int, stage: str, api_key: str, domain_full: str, freeze_minutes: int, limit_type: str = "UNKNOWN"):
+    """Enhanced rate limit logging with 429 classification"""
+    log_rate_limit(worker_id, stage, api_key, domain_full, freeze_minutes, limit_type, rate_limits_logger)
 
 def log_http_error_wrapper(worker_id: int, stage: str, api_key: str, domain_full: str, status_code: int, error_msg: str):
     log_http_error(worker_id, stage, api_key, domain_full, status_code, error_msg, http_errors_logger)
@@ -244,8 +245,10 @@ async def handle_stage_result(mongo_client, worker_id, stage_name, api_key, doma
     if status_code == 200:
         log_success_timing_wrapper(worker_id, stage_name, api_key, domain_full, response_time)
     elif status_code == 429:
+        # Enhanced 429 handling with classification
+        limit_type = result.get("limit_type", "UNKNOWN")
         freeze_minutes = 3
-        log_rate_limit_wrapper(worker_id, stage_name, api_key, domain_full, freeze_minutes)
+        log_rate_limit_wrapper(worker_id, stage_name, api_key, domain_full, freeze_minutes, limit_type)
     elif status_code is not None:
         error_details = classify_exception(None, status_code)
         log_error_details_wrapper(worker_id, stage_name, api_key, domain_full, error_details, response_time)
@@ -547,6 +550,8 @@ async def main():
             print(f"🎯 Adaptive range: {adaptive_config.get('min_delay_ms', 0)}ms - {adaptive_config.get('max_delay_ms', 700)}ms")
         else:
             print(f"⏱️  Fixed delay: {current_delay}ms (adaptive system disabled)")
+        
+        print(f"🔍 NEW: Enhanced 429 error classification (PERSONAL_QUOTA/GLOBAL_LIMIT)")
         
         config_checker = asyncio.create_task(check_shutdown_periodically())
         
