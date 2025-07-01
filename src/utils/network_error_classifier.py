@@ -84,6 +84,9 @@ def classify_exception(exception: Exception, response_status: Optional[int] = No
             suggested_action="Investigation needed"
         )
     
+    exception_name = type(exception).__name__
+    exception_str = str(exception).lower()
+    
     if isinstance(exception, (ProxyConnectionError, ProxyTimeoutError, ProxyError)):
         proxy_type = type(exception).__name__
         return ErrorDetails(
@@ -95,17 +98,27 @@ def classify_exception(exception: Exception, response_status: Optional[int] = No
             suggested_action="Try different session ID or proxy"
         )
     
-    if hasattr(exception, '__cause__') and exception.__cause__:
-        if isinstance(exception.__cause__, (ProxyConnectionError, ProxyTimeoutError, ProxyError)):
-            proxy_type = type(exception.__cause__).__name__
-            return ErrorDetails(
-                error_type=ErrorType.PROXY,
-                exception_class=f"Wrapped{proxy_type}",
-                error_message=f"Wrapped proxy error: {str(exception.__cause__)}",
-                should_retry=True,
-                api_key_consumed=False,
-                suggested_action="Try different session ID or proxy"
-            )
+    if (hasattr(exception, '__cause__') and exception.__cause__ and 
+        isinstance(exception.__cause__, (ProxyConnectionError, ProxyTimeoutError, ProxyError))):
+        proxy_type = type(exception.__cause__).__name__
+        return ErrorDetails(
+            error_type=ErrorType.PROXY,
+            exception_class=f"Wrapped{proxy_type}",
+            error_message=f"Wrapped proxy error: {str(exception.__cause__)}",
+            should_retry=True,
+            api_key_consumed=False,
+            suggested_action="Try different session ID or proxy"
+        )
+    
+    if "proxy" in exception_str and ("timeout" in exception_str or "connection" in exception_str):
+        return ErrorDetails(
+            error_type=ErrorType.PROXY,
+            exception_class=f"Wrapped{exception_name}",
+            error_message=f"Wrapped proxy error: {str(exception)}",
+            should_retry=True,
+            api_key_consumed=False,
+            suggested_action="Try different session ID or proxy"
+        )
     
     if isinstance(exception, ClientConnectorDNSError):
         return ErrorDetails(
@@ -133,6 +146,16 @@ def classify_exception(exception: Exception, response_status: Optional[int] = No
         return ErrorDetails(
             error_type=ErrorType.TIMEOUT,
             exception_class=timeout_type,
+            error_message=f"Timeout: {str(exception)}",
+            should_retry=True,
+            api_key_consumed=False,
+            suggested_action="Increase timeout or try different proxy"
+        )
+    
+    if "timeout" in exception_str:
+        return ErrorDetails(
+            error_type=ErrorType.TIMEOUT,
+            exception_class=exception_name,
             error_message=f"Timeout: {str(exception)}",
             should_retry=True,
             api_key_consumed=False,

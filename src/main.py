@@ -119,6 +119,7 @@ ip_usage_logger = all_loggers['ip_usage']
 revert_reasons_logger = all_loggers['revert_reasons']
 segmentation_validation_logger = all_loggers['segmentation_validation']
 adaptive_delay_logger = all_loggers['adaptive_delay']
+missing_segmentation_logger = all_loggers['missing_segmentation']
 
 def log_success_timing_wrapper(worker_id: int, stage: str, api_key: str, domain_full: str, response_time: float):
     log_success_timing(worker_id, stage, api_key, domain_full, response_time, success_timing_logger)
@@ -285,7 +286,7 @@ async def worker(worker_id: int, shared_mongo_client: AsyncIOMotorClient):
             try:
                 target_uri, domain_full, domain_id = await get_domain_for_analysis(shared_mongo_client)
                 
-                segment_combined = await get_domain_segmentation_info(shared_mongo_client, domain_full)
+                segment_combined = await get_domain_segmentation_info(shared_mongo_client, domain_full, missing_segmentation_logger)
                 
                 current_short_attempts = await get_short_response_attempts(shared_mongo_client, domain_id)
                 
@@ -547,14 +548,10 @@ async def main():
         else:
             print(f"⏱️  Fixed delay: {current_delay}ms (adaptive system disabled)")
         
-        print(f"🔧 Max concurrent starts: {max_concurrent_starts}")
-        print(f"🔄 Short response retry: Up to 5 attempts with enhanced prompts")
-        
         config_checker = asyncio.create_task(check_shutdown_periodically())
         
         if adaptive_enabled:
             adaptive_task = asyncio.create_task(periodic_adaptive_delay_evaluation(shared_mongo_client))
-            print(f"🔄 Adaptive delay evaluation task started (every {evaluation_interval}h)")
         
         workers = [
             asyncio.create_task(worker(worker_id, shared_mongo_client))

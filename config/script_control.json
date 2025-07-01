@@ -1,7 +1,7 @@
 {
   "enabled": false,
   "workers": {
-    "concurrent_workers": 50
+    "concurrent_workers": 60
   },
   "timing": {
     "start_delay_ms": 700,
@@ -13,10 +13,10 @@
     "enabled": true,
     "max_delay_ms": 700,
     "min_delay_ms": 200,
-    "current_delay_ms": 690,
+    "current_delay_ms": 640,
     "step_ms": 5,
     "evaluation_interval_hours": 1,
-    "last_evaluation": "2025-06-30T10:22:32.679305+00:00"
+    "last_evaluation": "2025-07-01T05:10:03.896077+00:00"
   },
   "stage_timings": {
     "stage1": {

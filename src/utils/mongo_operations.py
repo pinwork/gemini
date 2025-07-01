@@ -435,7 +435,8 @@ async def set_domain_error_status(mongo_client: AsyncIOMotorClient, domain_id: s
     wait=wait_exponential(multiplier=1, min=1, max=RETRY_DELAY),
     reraise=True
 )
-async def get_domain_segmentation_info(mongo_client: AsyncIOMotorClient, domain_full: str) -> str:
+async def get_domain_segmentation_info(mongo_client: AsyncIOMotorClient, domain_full: str, 
+                                     missing_segmentation_logger: Optional[logging.Logger] = None) -> str:
     try:
         db_name = MONGO_CONFIG["databases"]["main_db"]["name"]
         collection_name = MONGO_CONFIG["databases"]["main_db"]["collections"]["domain_segmented"]
@@ -443,17 +444,37 @@ async def get_domain_segmentation_info(mongo_client: AsyncIOMotorClient, domain_
         segmentation_collection = mongo_client[db_name][collection_name]
         
         segmentation_record = await segmentation_collection.find_one(
-            {"domain_full": domain_full},
-            {"segment_combined": 1}
+            {"domain_full": domain_full}
         )
         
-        if segmentation_record and segmentation_record.get("segment_combined"):
+        if segmentation_record:
             return segmentation_record["segment_combined"]
         
-        return ""
+        domain_parts = domain_full.split('.')
+        domain_core = domain_parts[0]
+        tld = '.'.join(domain_parts[1:]) if len(domain_parts) > 1 else ""
+        
+        base_record = {
+            "domain_full": domain_full,
+            "tld": tld,
+            "segment_combined": domain_core,
+            "domain_segment_count": 0
+        }
+        
+        await segmentation_collection.update_one(
+            {"domain_full": domain_full},
+            {"$setOnInsert": base_record},
+            upsert=True
+        )
+        
+        if missing_segmentation_logger:
+            missing_segmentation_logger.info(f"MISSING | Domain: {domain_full} | Created base record: {domain_core} | TLD: {tld}")
+        
+        return domain_core
+        
     except Exception as e:
-        logger.error(f"Error getting domain segmentation info for {domain_full}: {e}")
-        return ""
+        logger.error(f"Error getting/creating domain segmentation info for {domain_full}: {e}")
+        return domain_full.split('.')[0]
 
 @retry(
     retry=retry_if_exception_type(MONGODB_ERRORS),
@@ -717,7 +738,8 @@ async def save_gemini_results(mongo_client: AsyncIOMotorClient, domain_full: str
         if segmentation_update:
             await segmentation_collection.update_one(
                 {"domain_full": domain_full},
-                {"$set": segmentation_update}
+                {"$set": segmentation_update},
+                upsert=True
             )
     except Exception as e:
         logger.error(f"Error updating domain_segmented collection for {domain_full}: {e}")

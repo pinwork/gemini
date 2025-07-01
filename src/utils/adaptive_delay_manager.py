@@ -32,7 +32,8 @@ class AdaptiveDelayManager:
                 {
                     "$match": {
                         "api_status": "active",
-                        "api_provider": "gemini"
+                        "api_provider": "gemini",
+                        "last_response_status": {"$gt": 0}
                     }
                 },
                 {
@@ -82,6 +83,7 @@ class AdaptiveDelayManager:
                     "$set": {
                         "request_count_200": 0,
                         "request_count_429": 0,
+                        "last_response_status": 0,
                         "stats_window_start": datetime.now(timezone.utc)
                     }
                 }
@@ -143,8 +145,6 @@ class AdaptiveDelayManager:
             
             reset_count = await AdaptiveDelayManager.reset_all_gemini_counters(mongo_client)
             
-            adaptive_logger.info(f"RESET counters for {reset_count} Gemini keys")
-            
         except Exception as e:
             logger.error(f"Error in evaluate_and_adjust: {e}")
     
@@ -152,8 +152,6 @@ class AdaptiveDelayManager:
     async def startup_reset(mongo_client: AsyncIOMotorClient, startup_logger: logging.Logger) -> int:
         try:
             reset_count = await AdaptiveDelayManager.reset_all_gemini_counters(mongo_client)
-            
-            startup_logger.info(f"STARTUP RESET | Gemini Keys: {reset_count} | Counters cleared for clean slate")
             
             return reset_count
             

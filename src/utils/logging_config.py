@@ -267,6 +267,21 @@ def configure_adaptive_delay_logging() -> logging.Logger:
     adaptive_delay_logger.addHandler(adaptive_delay_file_handler)
     return adaptive_delay_logger
 
+def configure_missing_segmentation_logging() -> logging.Logger:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    missing_segmentation_log_file = LOG_DIR / "missing_segmentation.log"
+    missing_segmentation_logger = logging.getLogger("missing_segmentation")
+    missing_segmentation_logger.handlers = []
+    missing_segmentation_logger.setLevel(logging.INFO)
+    missing_segmentation_logger.propagate = False
+    missing_segmentation_file_handler = logging.handlers.RotatingFileHandler(
+        missing_segmentation_log_file, maxBytes=5*1024*1024, backupCount=3, encoding="utf-8"
+    )
+    missing_segmentation_file_handler.setLevel(logging.INFO)
+    missing_segmentation_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
+    missing_segmentation_logger.addHandler(missing_segmentation_file_handler)
+    return missing_segmentation_logger
+
 def setup_all_loggers() -> Dict[str, logging.Logger]:
     loggers = {
         'system_errors': configure_logging(),
@@ -284,6 +299,7 @@ def setup_all_loggers() -> Dict[str, logging.Logger]:
         'ip_usage': configure_ip_usage_logging(),
         'revert_reasons': configure_revert_reasons_logging(),
         'adaptive_delay': configure_adaptive_delay_logging(),
+        'missing_segmentation': configure_missing_segmentation_logging(),
     }
     
     logging.getLogger('aiohttp.client').setLevel(logging.WARNING)
