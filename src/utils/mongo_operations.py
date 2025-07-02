@@ -4,6 +4,7 @@
 import json
 import asyncio
 import logging
+import re  # ДОДАНО: для domain metrics
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Tuple, Optional, Dict
@@ -69,6 +70,27 @@ def get_timestamp_ms() -> int:
 def needs_ip_refresh(key_rec: dict) -> bool:
     ip = key_rec.get("current_ip", "")
     return not ("." in ip or ":" in ip)
+
+def calculate_domain_metrics(domain_core: str) -> Dict:
+    """
+    Обчислює domain metrics згідно з оригінальною логікою з domain parser
+    
+    Args:
+        domain_core: основна частина домену (без TLD)
+        
+    Returns:
+        Dict з domain metrics полями
+    """
+    vowels = set("aeiou")
+    cv_pattern = "".join("V" if ch.lower() in vowels else "C" for ch in domain_core if ch.isalpha())
+    
+    return {
+        "domain_cv_pattern": cv_pattern,
+        "domain_length": len(domain_core),
+        "domain_hyphen_count": domain_core.count("-"),
+        "domain_letter_count": sum(c.isalpha() for c in domain_core),
+        "domain_number_count": sum(c.isdigit() for c in domain_core)
+    }
 
 @retry(
     retry=retry_if_exception_type(MONGODB_ERRORS),
@@ -474,11 +496,20 @@ async def get_domain_segmentation_info(mongo_client: AsyncIOMotorClient, domain_
         domain_core = domain_parts[0]
         tld = '.'.join(domain_parts[1:]) if len(domain_parts) > 1 else ""
         
+        # НОВЕ: Обчислюємо domain metrics для базового запису
+        domain_metrics = calculate_domain_metrics(domain_core)
+        
         base_record = {
             "domain_full": domain_full,
             "tld": tld,
             "segment_combined": domain_core,
-            "domain_segment_count": 0
+            "domain_segment_count": 0,
+            # ДОДАЄМО domain metrics поля:
+            "domain_cv_pattern": domain_metrics["domain_cv_pattern"],
+            "domain_length": domain_metrics["domain_length"],
+            "domain_hyphen_count": domain_metrics["domain_hyphen_count"],
+            "domain_letter_count": domain_metrics["domain_letter_count"],
+            "domain_number_count": domain_metrics["domain_number_count"]
         }
         
         await segmentation_collection.update_one(
@@ -818,7 +849,7 @@ async def update_api_key_ip(mongo_client: AsyncIOMotorClient, key_id: str, ip: s
         return False
 
 if __name__ == "__main__":
-    print("=== MongoDB Operations - GLOBAL_LIMIT Rollback Ready ===\n")
+    print("=== MongoDB Operations with Domain Metrics ===\n")
     
     print("✅ MongoDB Operations Module loaded successfully")
     print(f"📁 Using ConfigManager for all configurations")
@@ -839,9 +870,19 @@ if __name__ == "__main__":
         for key, value in config_summary.items():
             print(f"   🔧 {key}: {value}")
         
+        # Тестуємо нову функцію calculate_domain_metrics
+        print(f"\n🧮 Testing Domain Metrics Calculation:")
+        test_domains = ["example", "shop24", "web-store", "ai123tech"]
+        for domain in test_domains:
+            metrics = calculate_domain_metrics(domain)
+            print(f"   📋 {domain:12s} → pattern:{metrics['domain_cv_pattern']:8s} | "
+                  f"len:{metrics['domain_length']:2d} | hyphens:{metrics['domain_hyphen_count']} | "
+                  f"letters:{metrics['domain_letter_count']:2d} | numbers:{metrics['domain_number_count']}")
+        
     except Exception as e:
         print(f"❌ Config loading failed: {e}")
     
-    print("\n🎯 NEW: GLOBAL_LIMIT rollback in finalize_api_key_usage()")
-    print("🔄 Enhanced 429 handling with api_last_used_date rollback")
+    print(f"\n🎯 NEW: Domain metrics calculation integrated!")
+    print(f"🔧 Function: calculate_domain_metrics() adds 5 new fields to base records")
+    print(f"📊 Fields: domain_cv_pattern, domain_length, domain_hyphen_count, domain_letter_count, domain_number_count")
     print("🛡️  Keys protected from unfair penalization during Google rate limits")

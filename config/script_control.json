@@ -4,19 +4,19 @@
     "concurrent_workers": 100
   },
   "timing": {
-    "start_delay_ms": 820,
+    "start_delay_ms": 900,
     "api_key_wait_time": 60,
     "domain_wait_time": 60,
     "max_concurrent_starts": 1
   },
   "adaptive_delay": {
     "enabled": true,
-    "max_delay_ms": 820,
+    "max_delay_ms": 900,
     "min_delay_ms": 100,
-    "current_delay_ms": 820,
+    "current_delay_ms": 900,
     "step_ms": 5,
     "evaluation_interval_hours": 1,
-    "last_evaluation": "2025-07-01T19:34:21.842397+00:00"
+    "last_evaluation": "2025-07-02T08:45:55.010948+00:00"
   },
   "stage_timings": {
     "stage1": {
