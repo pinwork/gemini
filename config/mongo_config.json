@@ -12,7 +12,7 @@
   },
   "databases": {
     "main_db": {
-      "uri": "mongodb://admin:admin123@84.247.129.81:27017/?authSource=admin",
+      "uri": "mongodb://admin:*@*:27017/?authSource=admin",
       "name": "webinfo",
       "collections": {
         "domain_main": "domain_main",
@@ -24,7 +24,7 @@
       }
     },
     "api_db": {
-      "uri": "mongodb://admin:admin123@84.247.129.81:27017/?authSource=admin",
+      "uri": "mongodb://admin:*@*:27017/?authSource=admin",
       "name": "api",
       "collections": {
         "keys": "data"
