@@ -248,7 +248,7 @@ def generate_system_prompt(segment_combined: str = "", domain_full: str = "", fa
     
     if failed_segments_full:
         failed_joined = failed_segments_full.replace(' ', '')
-        sections_with_variables.append(f"RETRY WARNING: Your previous segments_full '{failed_segments_full}' failed validation. Result joins to: '{failed_joined}' These do NOT match! Please provide segments that join exactly to '{domain_core}'")
+        sections_with_variables.append(f"RETRY WARNING: Your previous segments_full '{failed_segments_full}' failed validation. Result joins to: '{failed_joined}' These do NOT match! Please provide segments that join exactly to '{domain_core}'. CRITICAL: Do NOT add or remove any letters - split only existing characters. Keep hyphens as separate segments, do not expand abbreviations or fix spelling.")
     
     txt = " ".join(
         _apply_words_optimized(random.choice(_PRECOMPILED_PHRASE_LOOKUP.get(s, [s])))

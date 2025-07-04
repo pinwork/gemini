@@ -46,7 +46,7 @@ def configure_logging() -> logging.Logger:
     logger.setLevel(logging.WARNING)
     logger.propagate = False
     file_handler = logging.handlers.RotatingFileHandler(
-        log_file, maxBytes=10*1024*1024, backupCount=5, encoding="utf-8"
+        log_file, maxBytes=10*1024*1024, backupCount=0, encoding="utf-8"
     )
     file_handler.setLevel(logging.WARNING)
     file_handler.setFormatter(logging.Formatter(
@@ -65,7 +65,7 @@ def configure_segmentation_validation_logging() -> logging.Logger:
     seg_val_logger.propagate = False
 
     handler = logging.handlers.RotatingFileHandler(
-        seg_val_file, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+        seg_val_file, maxBytes=10 * 1024 * 1024, backupCount=0, encoding="utf-8"
     )
     handler.setLevel(logging.INFO)
     handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
@@ -80,7 +80,7 @@ def configure_success_timing_logging() -> logging.Logger:
     success_logger.setLevel(logging.INFO)
     success_logger.propagate = False
     success_file_handler = logging.handlers.RotatingFileHandler(
-        success_log_file, maxBytes=10*1024*1024, backupCount=5, encoding="utf-8"
+        success_log_file, maxBytes=10*1024*1024, backupCount=0, encoding="utf-8"
     )
     success_file_handler.setLevel(logging.INFO)
     success_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
@@ -95,7 +95,7 @@ def configure_rate_limits_logging() -> logging.Logger:
     rate_limits_logger.setLevel(logging.INFO)
     rate_limits_logger.propagate = False
     rate_limits_file_handler = logging.handlers.RotatingFileHandler(
-        rate_limits_log_file, maxBytes=5*1024*1024, backupCount=3, encoding="utf-8"
+        rate_limits_log_file, maxBytes=5*1024*1024, backupCount=0, encoding="utf-8"
     )
     rate_limits_file_handler.setLevel(logging.INFO)
     rate_limits_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
@@ -110,7 +110,7 @@ def configure_http_errors_logging() -> logging.Logger:
     http_errors_logger.setLevel(logging.INFO)
     http_errors_logger.propagate = False
     http_errors_file_handler = logging.handlers.RotatingFileHandler(
-        http_errors_log_file, maxBytes=10*1024*1024, backupCount=5, encoding="utf-8"
+        http_errors_log_file, maxBytes=10*1024*1024, backupCount=0, encoding="utf-8"
     )
     http_errors_file_handler.setLevel(logging.INFO)
     http_errors_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
@@ -125,7 +125,7 @@ def configure_stage1_issues_logging() -> logging.Logger:
     stage1_issues_logger.setLevel(logging.INFO)
     stage1_issues_logger.propagate = False
     stage1_issues_file_handler = logging.handlers.RotatingFileHandler(
-        stage1_issues_log_file, maxBytes=10*1024*1024, backupCount=5, encoding="utf-8"
+        stage1_issues_log_file, maxBytes=10*1024*1024, backupCount=0, encoding="utf-8"
     )
     stage1_issues_file_handler.setLevel(logging.INFO)
     stage1_issues_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
@@ -140,7 +140,7 @@ def configure_stage2_retries_logging() -> logging.Logger:
     stage2_retries_logger.setLevel(logging.INFO)
     stage2_retries_logger.propagate = False
     stage2_retries_file_handler = logging.handlers.RotatingFileHandler(
-        stage2_retries_log_file, maxBytes=10*1024*1024, backupCount=5, encoding="utf-8"
+        stage2_retries_log_file, maxBytes=10*1024*1024, backupCount=0, encoding="utf-8"
     )
     stage2_retries_file_handler.setLevel(logging.INFO)
     stage2_retries_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
@@ -155,7 +155,7 @@ def configure_proxy_errors_logging() -> logging.Logger:
     proxy_errors_logger.setLevel(logging.INFO)
     proxy_errors_logger.propagate = False
     proxy_errors_file_handler = logging.handlers.RotatingFileHandler(
-        proxy_errors_log_file, maxBytes=10*1024*1024, backupCount=5, encoding="utf-8"
+        proxy_errors_log_file, maxBytes=10*1024*1024, backupCount=0, encoding="utf-8"
     )
     proxy_errors_file_handler.setLevel(logging.INFO)
     proxy_errors_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
@@ -170,7 +170,7 @@ def configure_network_errors_logging() -> logging.Logger:
     network_errors_logger.setLevel(logging.INFO)
     network_errors_logger.propagate = False
     network_errors_file_handler = logging.handlers.RotatingFileHandler(
-        network_errors_log_file, maxBytes=10*1024*1024, backupCount=5, encoding="utf-8"
+        network_errors_log_file, maxBytes=10*1024*1024, backupCount=0, encoding="utf-8"
     )
     network_errors_file_handler.setLevel(logging.INFO)
     network_errors_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
@@ -185,7 +185,7 @@ def configure_api_errors_logging() -> logging.Logger:
     api_errors_logger.setLevel(logging.INFO)
     api_errors_logger.propagate = False
     api_errors_file_handler = logging.handlers.RotatingFileHandler(
-        api_errors_log_file, maxBytes=10*1024*1024, backupCount=5, encoding="utf-8"
+        api_errors_log_file, maxBytes=10*1024*1024, backupCount=0, encoding="utf-8"
     )
     api_errors_file_handler.setLevel(logging.INFO)
     api_errors_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
@@ -200,7 +200,7 @@ def configure_payload_errors_logging() -> logging.Logger:
     payload_errors_logger.setLevel(logging.INFO)
     payload_errors_logger.propagate = False
     payload_errors_file_handler = logging.handlers.RotatingFileHandler(
-        payload_errors_log_file, maxBytes=5*1024*1024, backupCount=3, encoding="utf-8"
+        payload_errors_log_file, maxBytes=5*1024*1024, backupCount=0, encoding="utf-8"
     )
     payload_errors_file_handler.setLevel(logging.INFO)
     payload_errors_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
@@ -215,7 +215,7 @@ def configure_unknown_errors_logging() -> logging.Logger:
     unknown_errors_logger.setLevel(logging.INFO)
     unknown_errors_logger.propagate = False
     unknown_errors_file_handler = logging.handlers.RotatingFileHandler(
-        unknown_errors_log_file, maxBytes=10*1024*1024, backupCount=5, encoding="utf-8"
+        unknown_errors_log_file, maxBytes=10*1024*1024, backupCount=0, encoding="utf-8"
     )
     unknown_errors_file_handler.setLevel(logging.INFO)
     unknown_errors_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
@@ -230,7 +230,7 @@ def configure_revert_reasons_logging() -> logging.Logger:
     revert_reasons_logger.setLevel(logging.INFO)
     revert_reasons_logger.propagate = False
     revert_reasons_file_handler = logging.handlers.RotatingFileHandler(
-        revert_reasons_log_file, maxBytes=10*1024*1024, backupCount=5, encoding="utf-8"
+        revert_reasons_log_file, maxBytes=10*1024*1024, backupCount=0, encoding="utf-8"
     )
     revert_reasons_file_handler.setLevel(logging.INFO)
     revert_reasons_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
@@ -245,7 +245,7 @@ def configure_ip_usage_logging() -> logging.Logger:
     ip_usage_logger.setLevel(logging.INFO)
     ip_usage_logger.propagate = False
     ip_usage_file_handler = logging.handlers.RotatingFileHandler(
-        ip_usage_log_file, maxBytes=5*1024*1024, backupCount=3, encoding="utf-8"
+        ip_usage_log_file, maxBytes=5*1024*1024, backupCount=0, encoding="utf-8"
     )
     ip_usage_file_handler.setLevel(logging.INFO)
     ip_usage_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
@@ -260,7 +260,7 @@ def configure_adaptive_delay_logging() -> logging.Logger:
     adaptive_delay_logger.setLevel(logging.INFO)
     adaptive_delay_logger.propagate = False
     adaptive_delay_file_handler = logging.handlers.RotatingFileHandler(
-        adaptive_delay_log_file, maxBytes=5*1024*1024, backupCount=3, encoding="utf-8"
+        adaptive_delay_log_file, maxBytes=5*1024*1024, backupCount=0, encoding="utf-8"
     )
     adaptive_delay_file_handler.setLevel(logging.INFO)
     adaptive_delay_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
@@ -275,7 +275,7 @@ def configure_missing_segmentation_logging() -> logging.Logger:
     missing_segmentation_logger.setLevel(logging.INFO)
     missing_segmentation_logger.propagate = False
     missing_segmentation_file_handler = logging.handlers.RotatingFileHandler(
-        missing_segmentation_log_file, maxBytes=5*1024*1024, backupCount=3, encoding="utf-8"
+        missing_segmentation_log_file, maxBytes=5*1024*1024, backupCount=0, encoding="utf-8"
     )
     missing_segmentation_file_handler.setLevel(logging.INFO)
     missing_segmentation_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))

@@ -13,10 +13,10 @@
     "enabled": true,
     "max_delay_ms": 900,
     "min_delay_ms": 100,
-    "current_delay_ms": 900,
+    "current_delay_ms": 725,
     "step_ms": 5,
     "evaluation_interval_hours": 1,
-    "last_evaluation": "2025-07-02T08:45:55.010948+00:00"
+    "last_evaluation": "2025-07-04T12:03:06.106657+00:00"
   },
   "stage_timings": {
     "stage1": {
